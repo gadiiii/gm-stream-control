@@ -80,7 +80,8 @@ class StreamStartRequest(BaseModel):
 
 
 class TeamInviteRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
+    email: str | None = None
     role: str = Field(default="viewer")
     invited_by: str | None = None
 
@@ -319,14 +320,14 @@ async def get_stream_status() -> dict[str, Any]:
 
 
 @app.post("/api/stream/start")
-async def start_stream(payload: StreamStartRequest) -> dict[str, Any]:
+async def start_stream(payload: StreamStartRequest | None = None) -> dict[str, Any]:
     global active_stream_id
     stream = await db_insert(
         "streams",
         {
             "started_at": utc_now(),
             "status": "live",
-            "title": payload.title,
+            "title": payload.title if payload else None,
             "peak_viewers": 0,
             "total_viewers": 0,
         },
@@ -412,7 +413,7 @@ async def live_analytics() -> dict[str, Any]:
 
 @app.get("/api/analytics/history")
 async def analytics_history() -> list[dict[str, Any]]:
-    return await db_select("stream_analytics")
+    return await db_select("streams")
 
 
 @app.get("/api/analytics/stream/{id}")
@@ -429,10 +430,14 @@ async def list_team_members() -> list[dict[str, Any]]:
 
 @app.post("/api/team/invite")
 async def invite_team_member(payload: TeamInviteRequest) -> dict[str, Any]:
+    user_id = payload.user_id or payload.email
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id or email is required.")
+
     return await db_insert(
         "team_members",
         {
-            "user_id": payload.user_id,
+            "user_id": user_id,
             "role": payload.role,
             "invited_by": payload.invited_by,
             "created_at": utc_now(),

@@ -1,8 +1,11 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
+import { toast } from "sonner"
+import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -44,6 +47,23 @@ interface TeamMember {
   lastActive: string
 }
 
+const toRole = (role: string): Role => {
+  if (role === "admin" || role === "operator" || role === "viewer") {
+    return role
+  }
+
+  return "viewer"
+}
+
+const mapTeamMember = (member: any): TeamMember => ({
+  id: member.id,
+  email: member.email ?? member.user_id ?? "",
+  name: member.email?.split("@")[0] ?? member.user_id ?? "Team member",
+  role: toRole(member.role),
+  joinedAt: member.created_at ? member.created_at.split("T")[0] : "",
+  lastActive: member.created_at ?? new Date().toISOString(),
+})
+
 const roleConfig: Record<Role, { label: string; color: string; icon: React.ElementType }> = {
   admin: {
     label: "Admin",
@@ -63,79 +83,76 @@ const roleConfig: Record<Role, { label: string; color: string; icon: React.Eleme
 }
 
 export default function TeamPage() {
-  const [members, setMembers] = useState<TeamMember[]>([
-    {
-      id: "1",
-      email: "pastor@church.org",
-      name: "Pastor Mike",
-      role: "admin",
-      joinedAt: "2024-01-15",
-      lastActive: "2024-03-10T14:30:00",
-    },
-    {
-      id: "2",
-      email: "sarah@church.org",
-      name: "Sarah Johnson",
-      role: "operator",
-      joinedAt: "2024-02-01",
-      lastActive: "2024-03-10T12:15:00",
-    },
-    {
-      id: "3",
-      email: "tom@church.org",
-      name: "Tom Williams",
-      role: "operator",
-      joinedAt: "2024-02-20",
-      lastActive: "2024-03-09T18:45:00",
-    },
-    {
-      id: "4",
-      email: "jenny@church.org",
-      name: "Jenny Davis",
-      role: "viewer",
-      joinedAt: "2024-03-01",
-      lastActive: "2024-03-08T10:00:00",
-    },
-  ])
+  const [members, setMembers] = useState<TeamMember[]>([])
 
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState<Role>("viewer")
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isInviting, setIsInviting] = useState(false)
+
+  useEffect(() => {
+    const loadTeam = async () => {
+      try {
+        const data = await api.getTeam()
+        setMembers(data.map(mapTeamMember))
+      } catch (error) {
+        console.error("Failed to load team", error)
+        toast.error("Failed to load team. Check your connection.")
+        setMembers([])
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadTeam()
+  }, [])
 
   const handleInvite = useCallback(async () => {
     if (!inviteEmail.trim()) return
 
-    setIsLoading(true)
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 800))
-
-    const newMember: TeamMember = {
-      id: Date.now().toString(),
-      email: inviteEmail,
-      name: inviteEmail.split("@")[0],
-      role: inviteRole,
-      joinedAt: new Date().toISOString().split("T")[0],
-      lastActive: new Date().toISOString(),
+    setIsInviting(true)
+    try {
+      const data = await api.inviteTeamMember({ email: inviteEmail, role: inviteRole })
+      setMembers((prev) => [...prev, mapTeamMember(data)])
+      setInviteEmail("")
+      setInviteRole("viewer")
+      setIsInviteDialogOpen(false)
+      toast.success("Team member invited")
+    } catch (error) {
+      console.error("Failed to invite team member", error)
+      toast.error("Failed to invite team member. Check your connection.")
+    } finally {
+      setIsInviting(false)
     }
-
-    setMembers((prev) => [...prev, newMember])
-    setInviteEmail("")
-    setInviteRole("viewer")
-    setIsInviteDialogOpen(false)
-    setIsLoading(false)
   }, [inviteEmail, inviteRole])
 
-  const handleRoleChange = useCallback((memberId: string, newRole: Role) => {
-    setMembers((prev) =>
-      prev.map((member) =>
-        member.id === memberId ? { ...member, role: newRole } : member
+  const handleRoleChange = useCallback(async (memberId: string, newRole: Role) => {
+    try {
+      const data = await api.updateTeamMemberRole(memberId, newRole)
+      const updatedMember = mapTeamMember(data)
+      setMembers((prev) =>
+        prev.map((member) =>
+          member.id === memberId ? updatedMember : member
+        )
       )
-    )
+      toast.success("Team member updated")
+    } catch (error) {
+      console.error("Failed to update team member", error)
+      toast.error("Failed to update team member. Check your connection.")
+    }
   }, [])
 
-  const handleRemoveMember = useCallback((memberId: string) => {
-    setMembers((prev) => prev.filter((member) => member.id !== memberId))
+  const handleRemoveMember = useCallback(async (memberId: string) => {
+    try {
+      const response = await api.deleteTeamMember(memberId)
+      if (!response.ok) throw new Error("Failed to remove member")
+      setMembers((prev) => prev.filter((member) => member.id !== memberId))
+      toast.success("Team member removed")
+    } catch (error) {
+      console.error("Failed to remove team member", error)
+      toast.error("Failed to remove team member. Check your connection.")
+    }
   }, [])
 
   const formatLastActive = (dateString: string) => {
@@ -232,10 +249,10 @@ export default function TeamPage() {
                 </Button>
                 <Button
                   onClick={handleInvite}
-                  disabled={!inviteEmail.trim() || isLoading}
+                  disabled={!inviteEmail.trim() || isInviting}
                   className="flex-1 bg-[#E8440A] hover:bg-[#E8440A]/90 text-white rounded-[6px]"
                 >
-                  {isLoading ? "Sending..." : "Send Invite"}
+                  {isInviting ? "Sending..." : "Send Invite"}
                 </Button>
               </div>
             </div>
@@ -279,7 +296,22 @@ export default function TeamPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {members.map((member) => {
+            {isLoading ? (
+              Array.from({ length: 4 }).map((_, index) => (
+                <TableRow key={index} className="border-border">
+                  <TableCell>
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-44" />
+                    </div>
+                  </TableCell>
+                  <TableCell><Skeleton className="h-8 w-[130px]" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                  <TableCell><Skeleton className="h-8 w-8" /></TableCell>
+                </TableRow>
+              ))
+            ) : members.map((member) => {
               const config = roleConfig[member.role]
               return (
                 <TableRow
@@ -364,7 +396,7 @@ export default function TeamPage() {
       </div>
 
       {/* Empty State */}
-      {members.length === 0 && (
+      {!isLoading && members.length === 0 && (
         <div className="text-center py-12">
           <p className="text-text-secondary">No team members yet</p>
           <p className="text-sm text-text-tertiary mt-1">

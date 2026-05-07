@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { Clock, Users, Activity } from "lucide-react"
 import { toast } from "sonner"
+import { api, mapDestination } from "@/lib/api"
 import { LiveBadge } from "@/components/streaming/live-badge"
 import { StreamPreview } from "@/components/streaming/stream-preview"
 import { StatCard } from "@/components/streaming/stat-card"
@@ -11,11 +12,28 @@ import { DestinationCard, type DestinationStatus } from "@/components/streaming/
 import { ThumbnailManager } from "@/components/streaming/thumbnail-manager"
 import { useWebSocket } from "@/components/streaming/websocket-provider"
 
+type Platform = "youtube" | "facebook" | "instagram" | "owncast"
+
 interface Destination {
-  platform: "youtube" | "facebook" | "instagram" | "owncast"
+  id: string
+  platform: Platform
   status: DestinationStatus
   viewers: number
   enabled: boolean
+}
+
+const toPlatform = (value: string): Platform | null => {
+  const platform = value.toLowerCase()
+  if (
+    platform === "youtube" ||
+    platform === "facebook" ||
+    platform === "instagram" ||
+    platform === "owncast"
+  ) {
+    return platform
+  }
+
+  return null
 }
 
 function formatUptime(seconds: number): string {
@@ -28,12 +46,7 @@ function formatUptime(seconds: number): string {
 export default function StreamingDashboard() {
   const { streamData } = useWebSocket()
   const [isLoading, setIsLoading] = useState(false)
-  const [destinations, setDestinations] = useState<Destination[]>([
-    { platform: "youtube", status: "disabled", viewers: 0, enabled: true },
-    { platform: "facebook", status: "disabled", viewers: 0, enabled: true },
-    { platform: "instagram", status: "disabled", viewers: 0, enabled: false },
-    { platform: "owncast", status: "disabled", viewers: 0, enabled: true },
-  ])
+  const [destinations, setDestinations] = useState<Destination[]>([])
   const [showEmergencyDialog, setShowEmergencyDialog] = useState(false)
 
   // Use WebSocket data if available, otherwise use local state
@@ -44,25 +57,55 @@ export default function StreamingDashboard() {
     bitrate: streamData ? streamData.bitrate_kbps.toLocaleString() : "0",
   }
 
+  useEffect(() => {
+    const loadDestinations = async () => {
+      try {
+        const data = await api.getDestinations()
+        const mapped = (data as any[])
+          .map(mapDestination)
+          .map((destination) => {
+            const platform = toPlatform(destination.platformType || destination.platform)
+            if (!platform) return null
+
+            return {
+              id: destination.id,
+              platform,
+              status: "disabled" as DestinationStatus,
+              viewers: 0,
+              enabled: destination.enabled,
+            }
+          })
+          .filter((destination): destination is Destination => destination !== null)
+
+        setDestinations(mapped)
+      } catch (error) {
+        console.error("Failed to load destinations", error)
+        toast.error("Failed to load destinations. Check your connection.")
+        setDestinations([])
+      }
+    }
+
+    loadDestinations()
+  }, [])
+
   const handleStartStream = useCallback(async () => {
     setIsLoading(true)
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     
     try {
-      const response = await fetch(`${apiUrl}/api/stream/start`, { method: "POST" })
-      if (!response.ok) throw new Error("Failed to start stream")
+      await api.startStream()
       
       // Update destinations to connected if enabled
       setDestinations((prev) =>
         prev.map((d) => ({
           ...d,
           status: d.enabled ? "connected" : "disabled",
-          viewers: d.enabled ? Math.floor(Math.random() * 500) + 100 : 0,
+          viewers: 0,
         }))
       )
       toast.success("Stream started")
-    } catch {
-      toast.error("Failed to start stream")
+    } catch (error) {
+      console.error("Failed to start stream", error)
+      toast.error("Failed to start stream. Check your connection.")
     } finally {
       setIsLoading(false)
     }
@@ -70,11 +113,9 @@ export default function StreamingDashboard() {
 
   const handleStopStream = useCallback(async () => {
     setIsLoading(true)
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     
     try {
-      const response = await fetch(`${apiUrl}/api/stream/stop`, { method: "POST" })
-      if (!response.ok) throw new Error("Failed to stop stream")
+      await api.stopStream()
       
       setDestinations((prev) =>
         prev.map((d) => ({
@@ -83,9 +124,10 @@ export default function StreamingDashboard() {
           viewers: 0,
         }))
       )
-      toast.info("Stream stopped")
-    } catch {
-      toast.error("Failed to stop stream")
+      toast.success("Stream stopped")
+    } catch (error) {
+      console.error("Failed to stop stream", error)
+      toast.error("Failed to stop stream. Check your connection.")
     } finally {
       setIsLoading(false)
     }
@@ -98,11 +140,9 @@ export default function StreamingDashboard() {
   const confirmEmergencyStop = useCallback(async () => {
     setShowEmergencyDialog(false)
     setIsLoading(true)
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     
     try {
-      const response = await fetch(`${apiUrl}/api/stream/emergency-stop`, { method: "POST" })
-      if (!response.ok) throw new Error("Failed to emergency stop")
+      await api.stopStream()
       
       setDestinations((prev) =>
         prev.map((d) => ({
@@ -112,27 +152,21 @@ export default function StreamingDashboard() {
         }))
       )
       toast.warning("Emergency stop activated")
-    } catch {
-      toast.error("Failed to emergency stop")
+    } catch (error) {
+      console.error("Failed to emergency stop", error)
+      toast.error("Failed to stop stream. Check your connection.")
     } finally {
       setIsLoading(false)
     }
   }, [])
 
   const handleToggleDestination = useCallback(
-    async (platform: Destination["platform"], enabled: boolean) => {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    async (platform: Platform, enabled: boolean) => {
       const destination = destinations.find((d) => d.platform === platform)
       if (!destination) return
 
       try {
-        const response = await fetch(`${apiUrl}/api/destinations/${platform}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled }),
-        })
-        
-        if (!response.ok) throw new Error("Failed to update destination")
+        await api.updateDestination(destination.id, { enabled })
 
         setDestinations((prev) =>
           prev.map((d) =>
@@ -145,14 +179,15 @@ export default function StreamingDashboard() {
                       ? "connected"
                       : "disabled"
                     : "disabled",
-                  viewers: isLive && enabled ? Math.floor(Math.random() * 500) + 100 : 0,
+                  viewers: 0,
                 }
               : d
           )
         )
         toast.success("Destination updated")
-      } catch {
-        toast.error("Failed to update destination")
+      } catch (error) {
+        console.error("Failed to update destination", error)
+        toast.error("Failed to update destination. Check your connection.")
       }
     },
     [isLive, destinations]

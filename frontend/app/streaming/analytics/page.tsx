@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   LineChart,
   Line,
@@ -26,7 +26,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Users, Clock, Monitor } from "lucide-react"
+import { toast } from "sonner"
+import { api } from "@/lib/api"
 
 // Mock data for viewer count over time
 const viewerData = [
@@ -44,60 +47,46 @@ const viewerData = [
   { time: "12:45", youtube: 189, facebook: 95, instagram: 38, owncast: 18 },
 ]
 
-// Mock stream history data
-const streamHistory = [
-  {
-    id: "1",
-    date: "2024-01-14",
-    startTime: "10:00 AM",
-    duration: "2h 45m",
-    platforms: ["YouTube", "Facebook", "Instagram"],
-    peakViewers: 378,
-    totalViews: 2847,
-  },
-  {
-    id: "2",
-    date: "2024-01-07",
-    startTime: "10:00 AM",
-    duration: "2h 30m",
-    platforms: ["YouTube", "Facebook"],
-    peakViewers: 312,
-    totalViews: 2156,
-  },
-  {
-    id: "3",
-    date: "2023-12-31",
-    startTime: "11:00 PM",
-    duration: "1h 15m",
-    platforms: ["YouTube", "Facebook", "Instagram", "Owncast"],
-    peakViewers: 524,
-    totalViews: 3892,
-  },
-  {
-    id: "4",
-    date: "2023-12-24",
-    startTime: "6:00 PM",
-    duration: "3h 00m",
-    platforms: ["YouTube", "Facebook"],
-    peakViewers: 445,
-    totalViews: 3245,
-  },
-  {
-    id: "5",
-    date: "2023-12-17",
-    startTime: "10:00 AM",
-    duration: "2h 20m",
-    platforms: ["YouTube"],
-    peakViewers: 287,
-    totalViews: 1876,
-  },
-]
-
 const platformColors = {
   youtube: "#E8440A",
   facebook: "#888888",
   instagram: "#555555",
   owncast: "#3D3D3D",
+}
+
+interface StreamHistoryRow {
+  id: string
+  date: string
+  startTime: string
+  duration: string
+  durationSecs: number
+  status: string
+  peakViewers: number
+  totalViews: number
+}
+
+function formatDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  return `${hours}h ${minutes}m`
+}
+
+function mapStreamHistory(stream: any): StreamHistoryRow {
+  const startedAt = stream.started_at ? new Date(stream.started_at) : null
+  const durationSecs = stream.duration_secs ?? 0
+
+  return {
+    id: stream.id,
+    date: startedAt ? startedAt.toISOString().split("T")[0] : "",
+    startTime: startedAt
+      ? startedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : "",
+    duration: formatDuration(durationSecs),
+    durationSecs,
+    status: stream.status ?? "",
+    peakViewers: stream.peak_viewers ?? 0,
+    totalViews: stream.total_viewers ?? 0,
+  }
 }
 
 function StatCard({
@@ -146,20 +135,37 @@ function CustomTooltip({ active, payload, label }: any) {
 
 export default function AnalyticsPage() {
   const [timeRange, setTimeRange] = useState("7d")
+  const [streamHistory, setStreamHistory] = useState<StreamHistoryRow[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const data = await api.getAnalyticsHistory()
+        setStreamHistory(data.map(mapStreamHistory))
+      } catch (error) {
+        console.error("Failed to load analytics history", error)
+        toast.error("Failed to load analytics. Check your connection.")
+        setStreamHistory([])
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadHistory()
+  }, [])
 
   // Calculate stats from mock data
   const peakViewers = Math.max(
-    ...viewerData.map(
-      (d) => d.youtube + d.facebook + d.instagram + d.owncast
-    )
+    0,
+    ...streamHistory.map((stream) => stream.peakViewers)
   )
   const totalDuration = streamHistory.reduce((acc, stream) => {
-    const [hours, mins] = stream.duration.split("h ")
-    return acc + parseInt(hours) * 60 + parseInt(mins)
+    return acc + Math.floor(stream.durationSecs / 60)
   }, 0)
   const totalHours = Math.floor(totalDuration / 60)
   const totalMins = totalDuration % 60
-  const platformsUsed = new Set(streamHistory.flatMap((s) => s.platforms)).size
+  const platformsUsed = 0
 
   return (
     <div className="space-y-6">
@@ -282,7 +288,7 @@ export default function AnalyticsPage() {
               <TableHead className="text-text-secondary">Date</TableHead>
               <TableHead className="text-text-secondary">Start Time</TableHead>
               <TableHead className="text-text-secondary">Duration</TableHead>
-              <TableHead className="text-text-secondary">Platforms</TableHead>
+              <TableHead className="text-text-secondary">Status</TableHead>
               <TableHead className="text-text-secondary text-right">
                 Peak Viewers
               </TableHead>
@@ -292,37 +298,49 @@ export default function AnalyticsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {streamHistory.map((stream) => (
-              <TableRow key={stream.id} className="border-border">
-                <TableCell className="font-mono text-sm text-text-primary">
-                  {stream.date}
-                </TableCell>
-                <TableCell className="font-mono text-sm text-text-secondary">
-                  {stream.startTime}
-                </TableCell>
-                <TableCell className="font-display text-lg text-text-primary tracking-wide">
-                  {stream.duration}
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1.5">
-                    {stream.platforms.map((platform) => (
-                      <span
-                        key={platform}
-                        className="inline-flex px-2 py-0.5 text-xs rounded-full bg-[#2A2A2A] text-text-secondary"
-                      >
-                        {platform}
-                      </span>
-                    ))}
-                  </div>
-                </TableCell>
-                <TableCell className="text-right font-display text-lg text-text-primary tracking-wide">
-                  {stream.peakViewers.toLocaleString()}
-                </TableCell>
-                <TableCell className="text-right font-display text-lg text-text-primary tracking-wide">
-                  {stream.totalViews.toLocaleString()}
+            {isLoading ? (
+              Array.from({ length: 4 }).map((_, index) => (
+                <TableRow key={index} className="border-border">
+                  <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                  <TableCell><Skeleton className="h-5 w-16" /></TableCell>
+                  <TableCell><Skeleton className="h-5 w-20" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-5 w-12 ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-5 w-12 ml-auto" /></TableCell>
+                </TableRow>
+              ))
+            ) : streamHistory.length > 0 ? (
+              streamHistory.map((stream) => (
+                <TableRow key={stream.id} className="border-border">
+                  <TableCell className="font-mono text-sm text-text-primary">
+                    {stream.date}
+                  </TableCell>
+                  <TableCell className="font-mono text-sm text-text-secondary">
+                    {stream.startTime}
+                  </TableCell>
+                  <TableCell className="font-display text-lg text-text-primary tracking-wide">
+                    {stream.duration}
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-flex px-2 py-0.5 text-xs rounded-full bg-[#2A2A2A] text-text-secondary">
+                      {stream.status || "unknown"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right font-display text-lg text-text-primary tracking-wide">
+                    {stream.peakViewers.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-display text-lg text-text-primary tracking-wide">
+                    {stream.totalViews.toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow className="border-border">
+                <TableCell colSpan={6} className="py-12 text-center text-text-secondary">
+                  No stream history yet
                 </TableCell>
               </TableRow>
-            ))}
+            )}
           </TableBody>
         </Table>
       </div>

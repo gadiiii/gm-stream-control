@@ -39,7 +39,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     try {
-      const ws = new WebSocket("ws://localhost:8000/api/stream/ws")
+     		const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
+const ws = new WebSocket(`${wsUrl}/api/stream/ws`)
+ 
 
       ws.onopen = () => {
         setIsConnected(true)

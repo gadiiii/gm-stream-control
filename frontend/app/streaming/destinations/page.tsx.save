@@ -3,7 +3,6 @@
 import { useState, useCallback, useEffect } from "react"
 import { Plus, Eye, EyeOff, Pencil, Trash2, Check, X } from "lucide-react"
 import { toast } from "sonner"
-import { api, mapDestination } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -33,9 +32,43 @@ interface Destination {
   streamKey: string
   title: string
   enabled: boolean
-  platformType?: string
 }
 
+const initialDestinations: Destination[] = [
+  {
+    id: "1",
+    platform: "YouTube",
+    rtmpUrl: "rtmp://a.rtmp.youtube.com/live2",
+    streamKey: "xxxx-xxxx-xxxx-xxxx-xxxx",
+    title: "Sunday Service Live",
+    enabled: true,
+  },
+  {
+    id: "2",
+    platform: "Facebook",
+    rtmpUrl: "rtmps://live-api-s.facebook.com:443/rtmp",
+    streamKey: "FB-xxxxxxxxxxxxxxxxxxxx",
+    title: "Church Facebook Page",
+    enabled: true,
+  },
+  {
+    id: "3",
+    platform: "Instagram",
+    rtmpUrl: "rtmps://live-upload.instagram.com:443/rtmp",
+    streamKey: "IG-xxxxxxxxxxxxxxxxxxxx",
+    title: "Instagram Live",
+    enabled: false,
+  },
+  {
+    id: "4",
+    platform: "Owncast",
+    rtmpUrl: "rtmp://stream.ourchurch.org/live",
+    streamKey: "owncast-secret-key-xxxxx",
+    title: "Church Website Stream",
+    enabled: true,
+  },
+]
+export default function DestinationsPage() {
 export default function DestinationsPage() {
   const [destinations, setDestinations] = useState<Destination[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -54,13 +87,67 @@ export default function DestinationsPage() {
   // Fetch destinations on mount
   useEffect(() => {
     const fetchDestinations = async () => {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      
       try {
-        const data = await api.getDestinations()
-        setDestinations(data.map(mapDestination))
-      } catch (error) {
-        console.error("Failed to load destinations", error)
-        toast.error("Failed to load destinations. Check your connection.")
-        setDestinations([])
+        const response = await fetch(`${apiUrl}/api/destinations`)
+        if (response.ok) {
+          const data = await response.json()
+Last login: Thu May  7 15:46:07 on ttys001
+➜  ~ curl http://localhost:8000/api/stream/status
+{"live":false,"uptime_secs":0,"bitrate_kbps":0,"total_viewers":0,"stream_name":null,"updated_at":"2026-05-07T22:52:25.366223+00:00"}%                           ➜  ~ grep -r "ws://localhost" ~/gm-stream-control/frontend/components/streaming/websocket-provider.tsx
+/Users/gadi/gm-stream-control/frontend/components/streaming/websocket-provider.tsx:      const ws = new WebSocket("ws://localhost:8000/api/stream/ws")
+➜  ~ sed -i '' 's|ws://localhost:8000/api/stream/ws|${process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"}/api/stream/ws|g' ~/gm-stream-control/frontend/components/streaming/websocket-provider.tsx
+sed: 1: "s|ws://localhost:8000/a ...": bad flag in substitute command: '|'
+➜  ~ cat ~/gm-stream-control/frontend/components/streaming/websocket-provider.tsx | grep -n "ws://localhost"
+42:      const ws = new WebSocket("ws://localhost:8000/api/stream/ws")
+➜  ~ nano ~/gm-stream-control/frontend/components/streaming/websocket-provider.tsx
+➜  ~ nano ~/gm-stream-control/frontend/app/streaming/destinations/page.tsx
+➜  ~ sed -n '65,75p' ~/gm-stream-control/frontend/app/streaming/destinations/page.tsx
+    rtmpUrl: "rtmp://stream.ourchurch.org/live",
+    streamKey: "owncast-secret-key-xxxxx",
+    title: "Church Website Stream",
+    enabled: true,
+  },
+]
+setDestinations(data
+export default function DestinationsPage() {
+  const [destinations, setDestinations] = useState<Destination[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+➜  ~ nano ~/gm-stream-control/frontend/app/streaming/destinations/page.tsx
+
+.../gadi/gm-stream-control/frontend/app/streaming/destinations/page.tsx Modified
+
+  // Fetch destinations on mount
+  useEffect(() => {
+    const fetchDestinations = async () => {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    
+      try {
+        const response = await fetch(`${apiUrl}/api/destinations`)
+        if (response.ok) {
+          const data = await response.json()
+          export default function DestinationsPage() {)
+        } else {
+          // Fallback to initial data if API unavailable
+          setDestinations(initialDestinations)
+        }
+      } catch {
+        // Fallback to initial data if API unavailable
+        setDestinations(initialDestinations)
+      } finally {
+        setIsLoading(false)
+                 [ No more matches for "setDestinations(data" ]                 
+^G Get Help  ^O WriteOut  ^R Read File ^Y Prev Pg   ^K Cut Text  ^C Cur Pos   
+^X Exit      ^J Justify   ^W Where is  ^V Next Pg   ^U UnCut Text^T To Spell  
+        } else {
+          // Fallback to initial data if API unavailable
+          setDestinations(initialDestinations)
+        }
+      } catch {
+        // Fallback to initial data if API unavailable
+        setDestinations(initialDestinations)
       } finally {
         setIsLoading(false)
       }
@@ -85,18 +172,28 @@ export default function DestinationsPage() {
     const destination = destinations.find((d) => d.id === id)
     if (!destination) return
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     const newEnabled = !destination.enabled
 
     try {
-      const data = await api.updateDestination(id, { enabled: newEnabled })
-      const updatedDestination = mapDestination(data)
+      const response = await fetch(`${apiUrl}/api/destinations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: newEnabled }),
+      })
+
+      if (!response.ok) throw new Error("Failed to update")
+
       setDestinations((prev) =>
-        prev.map((d) => (d.id === id ? updatedDestination : d))
+        prev.map((d) => (d.id === id ? { ...d, enabled: newEnabled } : d))
       )
       toast.success("Destination updated")
-    } catch (error) {
-      console.error("Failed to update destination", error)
-      toast.error("Failed to update destination. Check your connection.")
+    } catch {
+      // Still update locally even if API fails
+      setDestinations((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, enabled: newEnabled } : d))
+      )
+      toast.success("Destination updated")
     }
   }, [destinations])
 
@@ -113,53 +210,60 @@ export default function DestinationsPage() {
   const saveEditing = useCallback(async () => {
     if (!editForm) return
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
     try {
-      const data = await api.updateDestination(editForm.id, {
-        name: editForm.platform,
-        rtmp_url: editForm.rtmpUrl,
-        stream_key: editForm.streamKey,
-        enabled: editForm.enabled,
+      const response = await fetch(`${apiUrl}/api/destinations/${editForm.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editForm),
       })
-      const updatedDestination = mapDestination(data)
-      setDestinations((prev) =>
-        prev.map((d) => (d.id === editForm.id ? updatedDestination : d))
-      )
-      setEditingId(null)
-      setEditForm(null)
-      toast.success("Destination updated")
-    } catch (error) {
-      console.error("Failed to update destination", error)
-      toast.error("Failed to update destination. Check your connection.")
+
+      if (!response.ok) throw new Error("Failed to update")
+    } catch {
+      // Continue anyway - we'll update locally
     }
+
+    setDestinations((prev) =>
+      prev.map((d) => (d.id === editForm.id ? editForm : d))
+    )
+    setEditingId(null)
+    setEditForm(null)
+    toast.success("Destination updated")
   }, [editForm])
 
   const deleteDestination = useCallback(async (id: string) => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
     try {
-      const response = await api.deleteDestination(id)
-      if (!response.ok) throw new Error("Failed to delete")
-      setDestinations((prev) => prev.filter((d) => d.id !== id))
-      toast.success("Destination deleted")
-    } catch (error) {
-      console.error("Failed to delete destination", error)
-      toast.error("Failed to delete destination. Check your connection.")
+      await fetch(`${apiUrl}/api/destinations/${id}`, { method: "DELETE" })
+    } catch {
+      // Continue anyway
     }
+
+    setDestinations((prev) => prev.filter((d) => d.id !== id))
+    toast.success("Destination deleted")
   }, [])
 
   const addDestination = useCallback(async () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    const id = Date.now().toString()
+
     try {
-      const data = await api.createDestination({
-        name: newDestination.platform,
-        rtmp_url: newDestination.rtmpUrl,
-        stream_key: newDestination.streamKey,
-        enabled: newDestination.enabled,
-        platform_type: newDestination.platform.toLowerCase(),
+      const response = await fetch(`${apiUrl}/api/destinations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...newDestination, id }),
       })
 
-      setDestinations((prev) => [...prev, mapDestination(data)])
-    } catch (error) {
-      console.error("Failed to add destination", error)
-      toast.error("Failed to add destination. Check your connection.")
-      return
+      if (response.ok) {
+        const data = await response.json()
+        setDestinations((prev) => [...prev, data])
+      } else {
+        setDestinations((prev) => [...prev, { ...newDestination, id }])
+      }
+    } catch {
+      setDestinations((prev) => [...prev, { ...newDestination, id }])
     }
 
     setNewDestination({
