@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react"
 import { Plus, Eye, EyeOff, Pencil, Trash2, Check, X } from "lucide-react"
 import { toast } from "sonner"
-import { api, mapDestination } from "@/lib/api"
+import { api, mapDestination, type Destination } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -25,16 +25,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-
-interface Destination {
-  id: string
-  platform: string
-  rtmpUrl: string
-  streamKey: string
-  title: string
-  enabled: boolean
-  platformType?: string
-}
 
 export default function DestinationsPage() {
   const [destinations, setDestinations] = useState<Destination[]>([])

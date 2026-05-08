@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { toast } from "sonner"
-import { api } from "@/lib/api"
+import { api, type ApiTeamMember } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -55,11 +55,11 @@ const toRole = (role: string): Role => {
   return "viewer"
 }
 
-const mapTeamMember = (member: any): TeamMember => ({
-  id: member.id,
+const mapTeamMember = (member: ApiTeamMember): TeamMember => ({
+  id: member.id ?? "",
   email: member.email ?? member.user_id ?? "",
   name: member.email?.split("@")[0] ?? member.user_id ?? "Team member",
-  role: toRole(member.role),
+  role: toRole(member.role ?? ""),
   joinedAt: member.created_at ? member.created_at.split("T")[0] : "",
   lastActive: member.created_at ?? new Date().toISOString(),
 })

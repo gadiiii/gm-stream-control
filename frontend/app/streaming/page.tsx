@@ -61,7 +61,7 @@ export default function StreamingDashboard() {
     const loadDestinations = async () => {
       try {
         const data = await api.getDestinations()
-        const mapped = (data as any[])
+        const mapped = data
           .map(mapDestination)
           .map((destination) => {
             const platform = toPlatform(destination.platformType || destination.platform)

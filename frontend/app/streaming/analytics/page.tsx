@@ -29,7 +29,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Users, Clock, Monitor } from "lucide-react"
 import { toast } from "sonner"
-import { api } from "@/lib/api"
+import { api, type ApiStreamHistory } from "@/lib/api"
 
 // Mock data for viewer count over time
 const viewerData = [
@@ -65,15 +65,21 @@ interface StreamHistoryRow {
   totalViews: number
 }
 
-function formatDuration(seconds: number) {
+function toNumber(value: number | string | null | undefined): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatDuration(secondsValue: number | string | null | undefined): string {
+  const seconds = Math.max(0, Math.floor(toNumber(secondsValue)))
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   return `${hours}h ${minutes}m`
 }
 
-function mapStreamHistory(stream: any): StreamHistoryRow {
+function mapStreamHistory(stream: ApiStreamHistory): StreamHistoryRow {
   const startedAt = stream.started_at ? new Date(stream.started_at) : null
-  const durationSecs = stream.duration_secs ?? 0
+  const durationSecs = toNumber(stream.duration_secs)
 
   return {
     id: stream.id,
@@ -113,13 +119,25 @@ function StatCard({
   )
 }
 
-function CustomTooltip({ active, payload, label }: any) {
+interface TooltipEntry {
+  color: string
+  dataKey: string
+  value: number
+}
+
+interface CustomTooltipProps {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string
+}
+
+function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   if (!active || !payload) return null
 
   return (
     <div className="bg-elevated border border-border-strong rounded-[6px] p-3">
       <p className="font-mono text-xs text-text-secondary mb-2">{label}</p>
-      {payload.map((entry: any, index: number) => (
+      {payload.map((entry, index) => (
         <div key={index} className="flex items-center gap-2 text-sm">
           <div
             className="w-2 h-2 rounded-full"
