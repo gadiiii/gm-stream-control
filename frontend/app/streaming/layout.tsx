@@ -1,5 +1,6 @@
 "use client"
 
+import { useAuth } from "@/components/streaming/auth-provider"
 import { Sidebar } from "@/components/streaming/sidebar"
 import { WebSocketProvider } from "@/components/streaming/websocket-provider"
 import { Toaster } from "@/components/ui/sonner"
@@ -9,8 +10,17 @@ export default function StreamingLayout({
 }: {
   children: React.ReactNode
 }) {
-  // TODO: Re-enable auth check for production
-  // const { user, isLoading } = useAuth()
+  const { user, isLoading } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (!user) return null
 
   return (
     <WebSocketProvider>

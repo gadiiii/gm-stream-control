@@ -2,6 +2,9 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { useRouter, usePathname } from "next/navigation"
+import type { Session } from "@supabase/supabase-js"
+import { supabase } from "@/lib/supabase"
+import { api } from "@/lib/api"
 
 interface User {
   id: string
@@ -27,28 +30,48 @@ export function useAuth() {
   return context
 }
 
+function sessionToUser(session: Session): User {
+  const email = session.user.email ?? ""
+  return {
+    id: session.user.id,
+    email,
+    name: session.user.user_metadata?.name ?? email.split("@")[0],
+    role: (session.user.user_metadata?.role as User["role"]) ?? "viewer",
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
   const pathname = usePathname()
 
-  // Check for existing session on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem("stream-ctrl-user")
-    if (storedUser) {
-      setUser(JSON.parse(storedUser))
-    }
-    setIsLoading(false)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        api.setAuthToken(session.access_token)
+        setUser(sessionToUser(session))
+      }
+      setIsLoading(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        api.setAuthToken(session.access_token)
+        setUser(sessionToUser(session))
+      } else {
+        api.setAuthToken(null)
+        setUser(null)
+      }
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
-  // Redirect logic
   useEffect(() => {
     if (isLoading) return
-
     const isLoginPage = pathname === "/login"
     const isProtectedRoute = pathname.startsWith("/streaming")
-
     if (!user && isProtectedRoute) {
       router.push("/login")
     } else if (user && isLoginPage) {
@@ -58,31 +81,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true)
-    
-    // Simulate API call - in production this would call Supabase Auth
-    await new Promise((resolve) => setTimeout(resolve, 800))
-    
-    // Mock validation - accept any non-empty credentials for demo
-    if (email && password) {
-      const mockUser: User = {
-        id: "1",
-        email: email,
-        name: email.split("@")[0],
-        role: "admin",
-      }
-      setUser(mockUser)
-      localStorage.setItem("stream-ctrl-user", JSON.stringify(mockUser))
-      setIsLoading(false)
-      return true
-    }
-    
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     setIsLoading(false)
-    return false
+    if (error || !data.session) return false
+    api.setAuthToken(data.session.access_token)
+    setUser(sessionToUser(data.session))
+    return true
   }, [])
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut()
+    api.setAuthToken(null)
     setUser(null)
-    localStorage.removeItem("stream-ctrl-user")
     router.push("/login")
   }, [router])
 

@@ -1,6 +1,8 @@
 import asyncio
 import os
+import shutil
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -10,10 +12,12 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+import jwt as pyjwt
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from supabase import create_client
 
@@ -34,6 +38,9 @@ FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN", "")
 FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+
+THUMBNAIL_PATH = Path(tempfile.gettempdir()) / "gm_stream_thumbnail.jpg"
 
 supabase: Any | None = (
     create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -43,8 +50,8 @@ app = FastAPI(title="GM Stream Control Panel API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[FRONTEND_ORIGIN, "http://localhost:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -108,6 +115,28 @@ def get_fernet() -> Fernet:
     if not ENCRYPTION_KEY:
         raise HTTPException(status_code=503, detail="ENCRYPTION_KEY is not configured.")
     return Fernet(ENCRYPTION_KEY.encode())
+
+
+def get_current_user(request: Request) -> dict[str, Any]:
+    """Validate Supabase JWT from Authorization header. Skip if JWT secret not configured."""
+    if not SUPABASE_JWT_SECRET:
+        return {}
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+    token = auth.removeprefix("Bearer ").strip()
+    try:
+        payload = pyjwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+        return payload
+    except pyjwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Token has expired.") from exc
+    except pyjwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token.") from exc
 
 
 def encrypt_stream_key(stream_key: str) -> str:
@@ -315,12 +344,12 @@ async def stream_ws(websocket: WebSocket) -> None:
 
 
 @app.get("/api/stream/status")
-async def get_stream_status() -> dict[str, Any]:
+async def get_stream_status(_: dict = Depends(get_current_user)) -> dict[str, Any]:
     return latest_status.model_dump()
 
 
 @app.post("/api/stream/start")
-async def start_stream(payload: StreamStartRequest | None = None) -> dict[str, Any]:
+async def start_stream(payload: StreamStartRequest | None = None, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     global active_stream_id
     stream = await db_insert(
         "streams",
@@ -338,7 +367,7 @@ async def start_stream(payload: StreamStartRequest | None = None) -> dict[str, A
 
 
 @app.post("/api/stream/stop")
-async def stop_stream() -> dict[str, Any]:
+async def stop_stream(_: dict = Depends(get_current_user)) -> dict[str, Any]:
     global active_stream_id
     if not active_stream_id:
         raise HTTPException(status_code=404, detail="No active stream session.")
@@ -360,7 +389,7 @@ async def stop_stream() -> dict[str, Any]:
 
 
 @app.post("/api/stream/stop/{dest_id}")
-async def stop_destination(dest_id: UUID) -> dict[str, Any]:
+async def stop_destination(dest_id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     destination = await db_update("destinations", str(dest_id), {"enabled": False})
     nginx_result = await write_nginx_config_and_reload()
     if active_stream_id:
@@ -376,12 +405,12 @@ async def stop_destination(dest_id: UUID) -> dict[str, Any]:
 
 
 @app.get("/api/destinations")
-async def list_destinations() -> list[dict[str, Any]]:
+async def list_destinations(_: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
     return await db_select("destinations")
 
 
 @app.post("/api/destinations")
-async def create_destination(payload: DestinationCreate) -> dict[str, Any]:
+async def create_destination(payload: DestinationCreate, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     data = payload.model_dump()
     data["stream_key"] = encrypt_stream_key(data["stream_key"])
     destination = await db_insert("destinations", data)
@@ -390,7 +419,7 @@ async def create_destination(payload: DestinationCreate) -> dict[str, Any]:
 
 
 @app.patch("/api/destinations/{id}")
-async def update_destination(id: UUID, payload: DestinationPatch) -> dict[str, Any]:
+async def update_destination(id: UUID, payload: DestinationPatch, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     data = payload.model_dump(exclude_unset=True)
     if "stream_key" in data:
         data["stream_key"] = encrypt_stream_key(data["stream_key"])
@@ -400,36 +429,36 @@ async def update_destination(id: UUID, payload: DestinationPatch) -> dict[str, A
 
 
 @app.delete("/api/destinations/{id}")
-async def delete_destination(id: UUID) -> dict[str, Any]:
+async def delete_destination(id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     deleted = await db_delete("destinations", str(id))
     await write_nginx_config_and_reload()
     return {"deleted": deleted}
 
 
 @app.get("/api/analytics/live")
-async def live_analytics() -> dict[str, Any]:
+async def live_analytics(_: dict = Depends(get_current_user)) -> dict[str, Any]:
     return latest_status.model_dump()
 
 
 @app.get("/api/analytics/history")
-async def analytics_history() -> list[dict[str, Any]]:
+async def analytics_history(_: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
     return await db_select("streams")
 
 
 @app.get("/api/analytics/stream/{id}")
-async def stream_analytics(id: UUID) -> list[dict[str, Any]]:
+async def stream_analytics(id: UUID, _: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
     return await db_execute(
         get_supabase().table("stream_analytics").select("*").eq("stream_id", str(id))
     )
 
 
 @app.get("/api/team")
-async def list_team_members() -> list[dict[str, Any]]:
+async def list_team_members(_: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
     return await db_select("team_members")
 
 
 @app.post("/api/team/invite")
-async def invite_team_member(payload: TeamInviteRequest) -> dict[str, Any]:
+async def invite_team_member(payload: TeamInviteRequest, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     user_id = payload.user_id or payload.email
     if not user_id:
         raise HTTPException(status_code=422, detail="user_id or email is required.")
@@ -446,13 +475,34 @@ async def invite_team_member(payload: TeamInviteRequest) -> dict[str, Any]:
 
 
 @app.patch("/api/team/{id}/role")
-async def update_team_member_role(id: UUID, payload: TeamRolePatch) -> dict[str, Any]:
+async def update_team_member_role(id: UUID, payload: TeamRolePatch, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await db_update("team_members", str(id), {"role": payload.role})
 
 
 @app.delete("/api/team/{id}")
-async def delete_team_member(id: UUID) -> dict[str, Any]:
+async def delete_team_member(id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"deleted": await db_delete("team_members", str(id))}
+
+
+@app.post("/api/stream/thumbnail")
+async def upload_thumbnail(file: UploadFile = File(...), _: dict = Depends(get_current_user)) -> dict[str, Any]:
+    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=422, detail="Only JPEG, PNG, and WebP images are accepted.")
+    suffix = Path(file.filename or "thumb.jpg").suffix or ".jpg"
+    dest = THUMBNAIL_PATH.with_suffix(suffix)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"url": f"/api/stream/thumbnail/latest", "path": str(dest)}
+
+
+@app.get("/api/stream/thumbnail/latest")
+async def get_thumbnail() -> FileResponse:
+    # Find whichever suffix was saved last
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        candidate = THUMBNAIL_PATH.with_suffix(suffix)
+        if candidate.exists():
+            return FileResponse(candidate, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="No thumbnail uploaded yet.")
 
 
 @app.post("/api/stream/on_publish")

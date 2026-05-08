@@ -9,7 +9,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from "recharts"
 import {
   Table,
@@ -31,27 +30,9 @@ import { Users, Clock, Monitor } from "lucide-react"
 import { toast } from "sonner"
 import { api, type ApiStreamHistory } from "@/lib/api"
 
-// Mock data for viewer count over time
-const viewerData = [
-  { time: "10:00", youtube: 145, facebook: 89, instagram: 34, owncast: 12 },
-  { time: "10:15", youtube: 178, facebook: 102, instagram: 45, owncast: 18 },
-  { time: "10:30", youtube: 210, facebook: 118, instagram: 52, owncast: 22 },
-  { time: "10:45", youtube: 245, facebook: 134, instagram: 61, owncast: 28 },
-  { time: "11:00", youtube: 298, facebook: 156, instagram: 78, owncast: 35 },
-  { time: "11:15", youtube: 342, facebook: 178, instagram: 89, owncast: 42 },
-  { time: "11:30", youtube: 378, facebook: 195, instagram: 95, owncast: 48 },
-  { time: "11:45", youtube: 356, facebook: 182, instagram: 88, owncast: 45 },
-  { time: "12:00", youtube: 312, facebook: 165, instagram: 72, owncast: 38 },
-  { time: "12:15", youtube: 278, facebook: 142, instagram: 58, owncast: 32 },
-  { time: "12:30", youtube: 234, facebook: 118, instagram: 45, owncast: 25 },
-  { time: "12:45", youtube: 189, facebook: 95, instagram: 38, owncast: 18 },
-]
-
-const platformColors = {
-  youtube: "#E8440A",
-  facebook: "#888888",
-  instagram: "#555555",
-  owncast: "#3D3D3D",
+interface ViewerDataPoint {
+  date: string
+  viewers: number
 }
 
 interface StreamHistoryRow {
@@ -154,17 +135,27 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
 export default function AnalyticsPage() {
   const [timeRange, setTimeRange] = useState("7d")
   const [streamHistory, setStreamHistory] = useState<StreamHistoryRow[]>([])
+  const [viewerData, setViewerData] = useState<ViewerDataPoint[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const loadHistory = async () => {
       try {
         const data = await api.getAnalyticsHistory()
-        setStreamHistory(data.map(mapStreamHistory))
+        const rows = data.map(mapStreamHistory)
+        setStreamHistory(rows)
+        setViewerData(
+          rows
+            .filter((r) => r.date)
+            .slice()
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .map((r) => ({ date: r.date, viewers: r.peakViewers }))
+        )
       } catch (error) {
         console.error("Failed to load analytics history", error)
         toast.error("Failed to load analytics. Check your connection.")
         setStreamHistory([])
+        setViewerData([])
       } finally {
         setIsLoading(false)
       }
@@ -173,14 +164,8 @@ export default function AnalyticsPage() {
     loadHistory()
   }, [])
 
-  // Calculate stats from mock data
-  const peakViewers = Math.max(
-    0,
-    ...streamHistory.map((stream) => stream.peakViewers)
-  )
-  const totalDuration = streamHistory.reduce((acc, stream) => {
-    return acc + Math.floor(stream.durationSecs / 60)
-  }, 0)
+  const peakViewers = Math.max(0, ...streamHistory.map((s) => s.peakViewers))
+  const totalDuration = streamHistory.reduce((acc, s) => acc + Math.floor(s.durationSecs / 60), 0)
   const totalHours = Math.floor(totalDuration / 60)
   const totalMins = totalDuration % 60
   const platformsUsed = 0
@@ -225,73 +210,44 @@ export default function AnalyticsPage() {
 
       {/* Viewer Chart */}
       <div className="rounded-[8px] bg-surface border border-border p-6">
-        <h2 className="text-lg font-medium text-text-primary mb-6">
-          Viewers Over Time
-        </h2>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-medium text-text-primary">Peak Viewers Per Stream</h2>
+          <span className="text-xs text-text-secondary">Per-platform breakdown available in Phase 4</span>
+        </div>
         <div className="h-[350px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={viewerData}>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="#2A2A2A"
-                vertical={false}
-              />
-              <XAxis
-                dataKey="time"
-                stroke="#555555"
-                fontSize={12}
-                tickLine={false}
-                axisLine={{ stroke: "#2A2A2A" }}
-              />
-              <YAxis
-                stroke="#555555"
-                fontSize={12}
-                tickLine={false}
-                axisLine={{ stroke: "#2A2A2A" }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend
-                wrapperStyle={{ paddingTop: "20px" }}
-                formatter={(value) => (
-                  <span className="text-text-secondary capitalize text-sm">
-                    {value}
-                  </span>
-                )}
-              />
-              <Line
-                type="monotone"
-                dataKey="youtube"
-                stroke={platformColors.youtube}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: platformColors.youtube }}
-              />
-              <Line
-                type="monotone"
-                dataKey="facebook"
-                stroke={platformColors.facebook}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: platformColors.facebook }}
-              />
-              <Line
-                type="monotone"
-                dataKey="instagram"
-                stroke={platformColors.instagram}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: platformColors.instagram }}
-              />
-              <Line
-                type="monotone"
-                dataKey="owncast"
-                stroke={platformColors.owncast}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: platformColors.owncast }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {viewerData.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-text-secondary text-sm">
+              No stream data yet — viewer trends will appear here after your first stream
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={viewerData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2A2A2A" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke="#555555"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={{ stroke: "#2A2A2A" }}
+                />
+                <YAxis
+                  stroke="#555555"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={{ stroke: "#2A2A2A" }}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Line
+                  type="monotone"
+                  dataKey="viewers"
+                  stroke="#E8440A"
+                  strokeWidth={2}
+                  dot={{ fill: "#E8440A", r: 4 }}
+                  activeDot={{ r: 6, fill: "#E8440A" }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
