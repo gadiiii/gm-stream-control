@@ -1,0 +1,14 @@
+[Unit]
+Description=GM Stream Control — Next.js Frontend
+After=network.target gm-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/gm-stream-control/frontend
+ExecStart=/usr/bin/node node_modules/.bin/next start --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

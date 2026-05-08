@@ -118,25 +118,22 @@ def get_fernet() -> Fernet:
 
 
 def get_current_user(request: Request) -> dict[str, Any]:
-    """Validate Supabase JWT from Authorization header. Skip if JWT secret not configured."""
-    if not SUPABASE_JWT_SECRET:
+    """Validate Supabase JWT by calling the Supabase auth API."""
+    if supabase is None:
         return {}
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
     token = auth.removeprefix("Bearer ").strip()
     try:
-        payload = pyjwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-        return payload
-    except pyjwt.ExpiredSignatureError as exc:
-        raise HTTPException(status_code=401, detail="Token has expired.") from exc
-    except pyjwt.InvalidTokenError as exc:
-        raise HTTPException(status_code=401, detail="Invalid token.") from exc
+        response = supabase.auth.get_user(token)
+        if not response.user:
+            raise HTTPException(status_code=401, detail="Invalid token.")
+        return {"sub": response.user.id, "email": response.user.email}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.") from exc
 
 
 def encrypt_stream_key(stream_key: str) -> str:
@@ -307,7 +304,7 @@ http {{
 
 async def write_nginx_config_and_reload() -> dict[str, Any]:
     if not NGINX_CONFIG_PATH:
-        raise HTTPException(status_code=503, detail="NGINX_CONFIG_PATH is not configured.")
+        return {"skipped": True, "reason": "NGINX_CONFIG_PATH not configured"}
 
     destinations = await get_enabled_destinations()
     config_path = Path(NGINX_CONFIG_PATH)
