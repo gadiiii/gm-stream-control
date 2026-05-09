@@ -269,7 +269,9 @@ def build_nginx_config(destinations: list[dict[str, Any]]) -> str:
         push_lines.append(f"            push {target};")
 
     pushes = "\n".join(push_lines)
-    return f"""worker_processes auto;
+    return f"""load_module modules/ngx_rtmp_module.so;
+
+worker_processes auto;
 
 events {{
     worker_connections 1024;
