@@ -1,33 +1,50 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
-import { Video, VideoOff } from "lucide-react"
+import { VideoOff } from "lucide-react"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const HLS_BASE = API_URL.replace(/:8000$/, ":8080").replace(/:(\d+)$/, ":8080")
 
 interface StreamPreviewProps {
   isLive: boolean
-  thumbnailUrl?: string
-  refreshInterval?: number
+  streamName?: string
   className?: string
 }
 
 export function StreamPreview({
   isLive,
-  thumbnailUrl = "/api/stream/thumbnail",
-  refreshInterval = 10000,
+  streamName = "gracia",
   className,
 }: StreamPreviewProps) {
-  const [imageKey, setImageKey] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
-    if (!isLive) return
+    if (!isLive || !videoRef.current) return
 
-    const interval = setInterval(() => {
-      setImageKey((prev) => prev + 1)
-    }, refreshInterval)
+    const hlsUrl = `${HLS_BASE}/hls/${streamName}.m3u8`
+    let hls: import("hls.js").default | null = null
 
-    return () => clearInterval(interval)
-  }, [isLive, refreshInterval])
+    import("hls.js").then(({ default: Hls }) => {
+      if (!videoRef.current) return
+      if (Hls.isSupported()) {
+        hls = new Hls({ liveSyncDurationCount: 3 })
+        hls.loadSource(hlsUrl)
+        hls.attachMedia(videoRef.current)
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoRef.current?.play().catch(() => {})
+        })
+      } else if (videoRef.current.canPlayType("application/vnd.apple.mpegurl")) {
+        videoRef.current.src = hlsUrl
+        videoRef.current.play().catch(() => {})
+      }
+    })
+
+    return () => {
+      hls?.destroy()
+    }
+  }, [isLive, streamName])
 
   if (!isLive) {
     return (
@@ -45,26 +62,16 @@ export function StreamPreview({
 
   return (
     <div className={cn(
-      "relative aspect-video rounded-[8px] bg-surface border border-border overflow-hidden",
+      "relative aspect-video rounded-[8px] bg-black overflow-hidden",
       className
     )}>
-      {/* Placeholder for actual stream thumbnail */}
-      <div className="absolute inset-0 flex items-center justify-center bg-elevated">
-        <div className="flex flex-col items-center gap-3">
-          <Video className="w-12 h-12 text-accent" />
-          <span className="text-sm text-text-secondary">Live Preview</span>
-          <span className="text-xs font-mono text-text-tertiary">
-            Refreshing every {refreshInterval / 1000}s
-          </span>
-        </div>
-      </div>
-      {/* Actual image would load here */}
-      {/* <img
-        key={imageKey}
-        src={`${thumbnailUrl}?t=${imageKey}`}
-        alt="Stream preview"
-        className="absolute inset-0 w-full h-full object-cover"
-      /> */}
+      <video
+        ref={videoRef}
+        className="w-full h-full object-contain"
+        muted
+        playsInline
+        controls={false}
+      />
     </div>
   )
 }

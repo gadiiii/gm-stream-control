@@ -285,6 +285,10 @@ rtmp {{
         application live {{
             live on;
             record off;
+            hls on;
+            hls_path /tmp/hls;
+            hls_fragment 2;
+            hls_playlist_length 10;
             on_publish http://127.0.0.1:8000/api/stream/on_publish;
             on_done http://127.0.0.1:8000/api/stream/on_done;
 {pushes}
@@ -298,6 +302,15 @@ http {{
         location /stat {{
             rtmp_stat all;
             rtmp_stat_stylesheet stat.xsl;
+        }}
+        location /hls {{
+            types {{
+                application/vnd.apple.mpegurl m3u8;
+                video/mp2t ts;
+            }}
+            root /tmp;
+            add_header Cache-Control no-cache;
+            add_header Access-Control-Allow-Origin *;
         }}
     }}
 }}
