@@ -507,17 +507,20 @@ async def on_publish(request: Request) -> dict[str, Any]:
     global active_stream_id
     payload = await request_payload(request)
     stream_name = payload.get("name") or payload.get("stream") or latest_status.stream_name
-    stream = await db_insert(
-        "streams",
-        {
-            "started_at": utc_now(),
-            "status": "live",
-            "title": stream_name,
-            "peak_viewers": 0,
-            "total_viewers": 0,
-        },
-    )
-    active_stream_id = stream.get("id")
+    try:
+        stream = await db_insert(
+            "streams",
+            {
+                "started_at": utc_now(),
+                "status": "live",
+                "title": stream_name,
+                "peak_viewers": 0,
+                "total_viewers": 0,
+            },
+        )
+        active_stream_id = stream.get("id")
+    except Exception:
+        stream = {}
     return {"ok": True, "stream": stream}
 
 
