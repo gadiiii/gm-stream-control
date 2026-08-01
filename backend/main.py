@@ -289,6 +289,7 @@ rtmp {{
             hls_path /tmp/hls;
             hls_fragment 2;
             hls_playlist_length 10;
+            resolver 8.8.8.8 valid=300s ipv6=off;
             on_publish http://127.0.0.1:8000/api/stream/on_publish;
             on_done http://127.0.0.1:8000/api/stream/on_done;
 {pushes}
