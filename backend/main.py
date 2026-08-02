@@ -123,9 +123,12 @@ class CompanionAction(BaseModel):
     title: str | None = None
 
 
+POLL_FAILURES_BEFORE_OFFLINE = 3
+
 latest_status = StreamStatus()
 active_stream_id: str | None = None
 active_stream_title: str | None = None
+peak_viewers = 0
 connected_websockets: set[WebSocket] = set()
 bitrate_history: deque[dict[str, Any]] = deque(maxlen=360)
 
@@ -268,17 +271,29 @@ def parse_nginx_rtmp_stat(xml_text: str) -> StreamStatus:
 
 
 async def poll_nginx_stats() -> None:
-    global latest_status
+    """Poll nginx-rtmp every 5s.
+
+    A failed fetch means we don't know the state, not that the stream ended —
+    reporting offline immediately would fire a false stream-drop alert on any
+    blip. Hold the last known status until several polls in a row have failed.
+    """
+    global latest_status, peak_viewers
+    failures = 0
     async with httpx.AsyncClient(timeout=5) as client:
         while True:
             try:
                 response = await client.get(RTMP_STAT_URL)
                 response.raise_for_status()
                 latest_status = parse_nginx_rtmp_stat(response.text)
+                failures = 0
                 await record_live_analytics()
             except Exception:
-                latest_status = StreamStatus(updated_at=utc_now())
+                failures += 1
+                if failures >= POLL_FAILURES_BEFORE_OFFLINE:
+                    latest_status = StreamStatus(updated_at=utc_now())
+
             if latest_status.live:
+                peak_viewers = max(peak_viewers, latest_status.total_viewers)
                 bitrate_history.append(
                     {
                         "t": latest_status.updated_at,
@@ -417,8 +432,41 @@ async def get_stream_status(_: dict = Depends(get_current_user)) -> dict[str, An
     return latest_status.model_dump()
 
 
-async def do_start_stream(title: str | None) -> dict[str, Any]:
-    global active_stream_id, active_stream_title
+async def find_open_stream() -> str | None:
+    """Recover the open session id — in-memory state is lost on backend restart."""
+    with suppress(Exception):
+        rows = await db_execute(
+            get_supabase()
+            .table("streams")
+            .select("id")
+            .eq("status", "live")
+            .order("started_at", desc=True)
+            .limit(1)
+        )
+        if rows:
+            return rows[0]["id"]
+    return None
+
+
+async def ensure_stream_session(title: str | None, *, force_title: bool = False) -> dict[str, Any]:
+    """Return the open stream row, creating one only if no session is already open.
+
+    Both the UI (start_stream) and nginx (on_publish) open a session. Whichever
+    fires second must adopt the existing row — inserting a second one would leave
+    the first stuck at status "live" forever.
+    """
+    global active_stream_id, active_stream_title, peak_viewers
+
+    if active_stream_id is None:
+        active_stream_id = await find_open_stream()
+
+    if active_stream_id:
+        if force_title and title and title != active_stream_title:
+            active_stream_title = title
+            with suppress(Exception):
+                return await db_update("streams", active_stream_id, {"title": title})
+        return {"id": active_stream_id, "title": active_stream_title}
+
     stream = await db_insert(
         "streams",
         {
@@ -431,14 +479,23 @@ async def do_start_stream(title: str | None) -> dict[str, Any]:
     )
     active_stream_id = stream.get("id")
     active_stream_title = title
+    peak_viewers = 0
     bitrate_history.clear()
+    return stream
+
+
+async def do_start_stream(title: str | None) -> dict[str, Any]:
+    stream = await ensure_stream_session(title, force_title=True)
     nginx_result = await write_nginx_config_and_reload()
     await trigger_companion_button(COMPANION_BUTTON_GOLIVE)
     return {"stream": stream, "nginx": nginx_result}
 
 
 async def do_stop_stream() -> dict[str, Any]:
-    global active_stream_id, active_stream_title
+    global active_stream_id, active_stream_title, peak_viewers
+
+    if active_stream_id is None:
+        active_stream_id = await find_open_stream()
     if not active_stream_id:
         raise HTTPException(status_code=404, detail="No active stream session.")
 
@@ -449,12 +506,13 @@ async def do_stop_stream() -> dict[str, Any]:
             "ended_at": utc_now(),
             "duration_secs": latest_status.uptime_secs,
             "status": "ended",
-            "peak_viewers": latest_status.total_viewers,
+            "peak_viewers": max(peak_viewers, latest_status.total_viewers),
             "total_viewers": latest_status.total_viewers,
         },
     )
     active_stream_id = None
     active_stream_title = None
+    peak_viewers = 0
     await trigger_companion_button(COMPANION_BUTTON_STOP)
     return {"stream": stream}
 
@@ -642,21 +700,11 @@ async def get_thumbnail() -> FileResponse:
 
 @app.post("/api/stream/on_publish")
 async def on_publish(request: Request) -> dict[str, Any]:
-    global active_stream_id
     payload = await request_payload(request)
     stream_name = payload.get("name") or payload.get("stream") or latest_status.stream_name
+    # A DB failure must not reject the publish — nginx treats a non-2xx as "deny".
     try:
-        stream = await db_insert(
-            "streams",
-            {
-                "started_at": utc_now(),
-                "status": "live",
-                "title": stream_name,
-                "peak_viewers": 0,
-                "total_viewers": 0,
-            },
-        )
-        active_stream_id = stream.get("id")
+        stream = await ensure_stream_session(stream_name)
     except Exception:
         stream = {}
     return {"ok": True, "stream": stream}
@@ -664,23 +712,27 @@ async def on_publish(request: Request) -> dict[str, Any]:
 
 @app.post("/api/stream/on_done")
 async def on_done(request: Request) -> dict[str, Any]:
-    global active_stream_id
+    global active_stream_id, active_stream_title, peak_viewers
     payload = await request_payload(request)
-    stream_id = payload.get("stream_id") or active_stream_id
+    stream_id = payload.get("stream_id") or active_stream_id or await find_open_stream()
     if not stream_id:
         return {"ok": True, "stream": None}
 
-    stream = await db_update(
-        "streams",
-        str(stream_id),
-        {
-            "ended_at": utc_now(),
-            "duration_secs": latest_status.uptime_secs,
-            "status": "ended",
-            "peak_viewers": latest_status.total_viewers,
-            "total_viewers": latest_status.total_viewers,
-        },
-    )
+    stream = {}
+    with suppress(Exception):
+        stream = await db_update(
+            "streams",
+            str(stream_id),
+            {
+                "ended_at": utc_now(),
+                "duration_secs": latest_status.uptime_secs,
+                "status": "ended",
+                "peak_viewers": max(peak_viewers, latest_status.total_viewers),
+                "total_viewers": latest_status.total_viewers,
+            },
+        )
     if active_stream_id == str(stream_id):
         active_stream_id = None
+        active_stream_title = None
+        peak_viewers = 0
     return {"ok": True, "stream": stream}
