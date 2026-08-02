@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import shutil
 import socket
@@ -25,6 +26,8 @@ from pydantic import BaseModel, Field
 from supabase import create_client
 
 load_dotenv()
+
+logger = logging.getLogger("gm_stream_control")
 
 
 def utc_now() -> str:
@@ -100,7 +103,32 @@ async def verify_tunnel_secret(request: Request, call_next):
 
     if CF_TUNNEL_SECRET and not exempt and arrived_over_the_internet(request):
         if request.headers.get("X-Tunnel-Secret") != CF_TUNNEL_SECRET:
-            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+            # Say why. A bare 403 here is near-impossible to diagnose from the
+            # browser, which only reports it as a failed request.
+            reason = (
+                "secret did not match"
+                if request.headers.get("X-Tunnel-Secret")
+                else "no X-Tunnel-Secret header"
+            )
+            logger.warning(
+                "Rejected %s %s — %s (host=%r, via_cloudflare=%s, client=%s)",
+                request.method,
+                path,
+                reason,
+                request.headers.get("host"),
+                bool(request.headers.get("CF-Ray")),
+                request.client.host if request.client else "?",
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        f"Rejected: {reason}. This request was addressed to "
+                        f"{request.headers.get('host')!r} but did not come through "
+                        "the Cloudflare tunnel."
+                    )
+                },
+            )
     return await call_next(request)
 
 
