@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from supabase import create_client
 
@@ -38,6 +38,7 @@ FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN", "")
 FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
+CF_TUNNEL_SECRET = os.getenv("CF_TUNNEL_SECRET", "")
 _frontend_origins_raw = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 FRONTEND_ORIGINS: list[str] = [o.strip() for o in _frontend_origins_raw.split(",") if o.strip()]
 if "http://localhost:3000" not in FRONTEND_ORIGINS:
@@ -58,6 +59,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_TUNNEL_EXEMPT = {"/api/stream/on_publish", "/api/stream/on_done", "/api/stream/ws"}
+
+@app.middleware("http")
+async def verify_tunnel_secret(request: Request, call_next):
+    if CF_TUNNEL_SECRET and request.url.path not in _TUNNEL_EXEMPT:
+        if request.headers.get("X-Tunnel-Secret") != CF_TUNNEL_SECRET:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    return await call_next(request)
 
 
 class StreamStatus(BaseModel):
