@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from collections import deque
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,10 @@ FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
 CF_TUNNEL_SECRET = os.getenv("CF_TUNNEL_SECRET", "")
+COMPANION_API_KEY = os.getenv("COMPANION_API_KEY", "")
+COMPANION_URL = os.getenv("COMPANION_URL", "")
+COMPANION_BUTTON_GOLIVE = os.getenv("COMPANION_BUTTON_GOLIVE", "")
+COMPANION_BUTTON_STOP = os.getenv("COMPANION_BUTTON_STOP", "")
 _frontend_origins_raw = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 FRONTEND_ORIGINS: list[str] = [o.strip() for o in _frontend_origins_raw.split(",") if o.strip()]
 if "http://localhost:3000" not in FRONTEND_ORIGINS:
@@ -64,7 +69,9 @@ _TUNNEL_EXEMPT = {"/api/stream/on_publish", "/api/stream/on_done", "/api/stream/
 
 @app.middleware("http")
 async def verify_tunnel_secret(request: Request, call_next):
-    if CF_TUNNEL_SECRET and request.url.path not in _TUNNEL_EXEMPT:
+    path = request.url.path
+    exempt = path in _TUNNEL_EXEMPT or path.startswith("/api/companion/")
+    if CF_TUNNEL_SECRET and not exempt:
         if request.headers.get("X-Tunnel-Secret") != CF_TUNNEL_SECRET:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     return await call_next(request)
@@ -110,9 +117,17 @@ class TeamRolePatch(BaseModel):
     role: str
 
 
+class CompanionAction(BaseModel):
+    action: str
+    destination_id: str | None = None
+    title: str | None = None
+
+
 latest_status = StreamStatus()
 active_stream_id: str | None = None
+active_stream_title: str | None = None
 connected_websockets: set[WebSocket] = set()
+bitrate_history: deque[dict[str, Any]] = deque(maxlen=360)
 
 
 def get_supabase() -> Any:
@@ -147,6 +162,24 @@ def get_current_user(request: Request) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired token.") from exc
+
+
+def require_companion_key(request: Request) -> None:
+    if not COMPANION_API_KEY:
+        raise HTTPException(status_code=503, detail="COMPANION_API_KEY is not configured.")
+    provided = request.headers.get("X-Companion-Key") or request.query_params.get("key")
+    if provided != COMPANION_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid Companion API key.")
+
+
+async def trigger_companion_button(button: str) -> None:
+    """Press a Bitfocus Companion button, e.g. "1/0/2" (page/row/column)."""
+    if not COMPANION_URL or not button:
+        return
+    url = f"{COMPANION_URL.rstrip('/')}/api/location/{button.strip('/')}/press"
+    with suppress(Exception):
+        async with httpx.AsyncClient(timeout=3) as client:
+            await client.post(url)
 
 
 def encrypt_stream_key(stream_key: str) -> str:
@@ -245,6 +278,14 @@ async def poll_nginx_stats() -> None:
                 await record_live_analytics()
             except Exception:
                 latest_status = StreamStatus(updated_at=utc_now())
+            if latest_status.live:
+                bitrate_history.append(
+                    {
+                        "t": latest_status.updated_at,
+                        "bitrate_kbps": latest_status.bitrate_kbps,
+                        "viewers": latest_status.total_viewers,
+                    }
+                )
             await asyncio.sleep(5)
 
 
@@ -376,44 +417,56 @@ async def get_stream_status(_: dict = Depends(get_current_user)) -> dict[str, An
     return latest_status.model_dump()
 
 
-@app.post("/api/stream/start")
-async def start_stream(payload: StreamStartRequest | None = None, _: dict = Depends(get_current_user)) -> dict[str, Any]:
-    global active_stream_id
+async def do_start_stream(title: str | None) -> dict[str, Any]:
+    global active_stream_id, active_stream_title
     stream = await db_insert(
         "streams",
         {
             "started_at": utc_now(),
             "status": "live",
-            "title": payload.title if payload else None,
+            "title": title,
             "peak_viewers": 0,
             "total_viewers": 0,
         },
     )
     active_stream_id = stream.get("id")
+    active_stream_title = title
+    bitrate_history.clear()
     nginx_result = await write_nginx_config_and_reload()
+    await trigger_companion_button(COMPANION_BUTTON_GOLIVE)
     return {"stream": stream, "nginx": nginx_result}
 
 
-@app.post("/api/stream/stop")
-async def stop_stream(_: dict = Depends(get_current_user)) -> dict[str, Any]:
-    global active_stream_id
+async def do_stop_stream() -> dict[str, Any]:
+    global active_stream_id, active_stream_title
     if not active_stream_id:
         raise HTTPException(status_code=404, detail="No active stream session.")
 
-    duration_secs = latest_status.uptime_secs
     stream = await db_update(
         "streams",
         active_stream_id,
         {
             "ended_at": utc_now(),
-            "duration_secs": duration_secs,
+            "duration_secs": latest_status.uptime_secs,
             "status": "ended",
             "peak_viewers": latest_status.total_viewers,
             "total_viewers": latest_status.total_viewers,
         },
     )
     active_stream_id = None
+    active_stream_title = None
+    await trigger_companion_button(COMPANION_BUTTON_STOP)
     return {"stream": stream}
+
+
+@app.post("/api/stream/start")
+async def start_stream(payload: StreamStartRequest | None = None, _: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await do_start_stream(payload.title if payload else None)
+
+
+@app.post("/api/stream/stop")
+async def stop_stream(_: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await do_stop_stream()
 
 
 @app.post("/api/stream/stop/{dest_id}")
@@ -478,6 +531,60 @@ async def stream_analytics(id: UUID, _: dict = Depends(get_current_user)) -> lis
     return await db_execute(
         get_supabase().table("stream_analytics").select("*").eq("stream_id", str(id))
     )
+
+
+@app.get("/api/analytics/bitrate")
+async def bitrate_chart(_: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
+    return list(bitrate_history)
+
+
+@app.get("/api/companion/status")
+async def companion_status(_: None = Depends(require_companion_key)) -> dict[str, Any]:
+    destinations: list[dict[str, Any]] = []
+    with suppress(Exception):
+        destinations = [
+            {"id": d["id"], "name": d["name"], "enabled": d["enabled"]}
+            for d in await db_select("destinations", "id,name,enabled")
+        ]
+    return {
+        "live": latest_status.live,
+        "uptime_secs": latest_status.uptime_secs,
+        "bitrate_kbps": latest_status.bitrate_kbps,
+        "viewers": latest_status.total_viewers,
+        "title": active_stream_title,
+        "stream_name": latest_status.stream_name,
+        "destinations": destinations,
+        "updated_at": latest_status.updated_at,
+    }
+
+
+@app.post("/api/companion/action")
+async def companion_action(payload: CompanionAction, _: None = Depends(require_companion_key)) -> dict[str, Any]:
+    action = payload.action.lower()
+
+    if action == "start_stream":
+        return {"ok": True, "result": await do_start_stream(payload.title)}
+
+    if action == "stop_stream":
+        return {"ok": True, "result": await do_stop_stream()}
+
+    if action in ("toggle_destination", "enable_destination", "disable_destination"):
+        if not payload.destination_id:
+            raise HTTPException(status_code=422, detail="destination_id is required.")
+        if action == "toggle_destination":
+            rows = await db_execute(
+                get_supabase().table("destinations").select("enabled").eq("id", payload.destination_id)
+            )
+            if not rows:
+                raise HTTPException(status_code=404, detail="Destination not found.")
+            enabled = not rows[0]["enabled"]
+        else:
+            enabled = action == "enable_destination"
+        destination = await db_update("destinations", payload.destination_id, {"enabled": enabled})
+        await write_nginx_config_and_reload()
+        return {"ok": True, "result": {"destination": destination}}
+
+    raise HTTPException(status_code=422, detail=f"Unknown action: {payload.action}")
 
 
 @app.get("/api/team")

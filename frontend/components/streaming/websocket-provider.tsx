@@ -8,6 +8,7 @@ interface StreamData {
   uptime_secs: number
   bitrate_kbps: number
   total_viewers: number
+  stream_name?: string | null
 }
 
 interface WebSocketContextType {

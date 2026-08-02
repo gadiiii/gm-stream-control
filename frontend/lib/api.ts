@@ -51,6 +51,12 @@ export interface ApiStreamHistory {
   total_viewers?: number | null
 }
 
+export interface BitrateSample {
+  t: string | null
+  bitrate_kbps: number
+  viewers: number
+}
+
 export interface TeamInvitePayload {
   email: string
   role: string
@@ -113,10 +119,12 @@ export const api = {
     fetch(`${API_URL}/api/stream/status`, { headers: authHeaders() }).then((response) =>
       parseJson<unknown>(response)
     ),
-  startStream: () =>
-    fetch(`${API_URL}/api/stream/start`, { method: "POST", headers: authHeaders() }).then((response) =>
-      parseJson<unknown>(response)
-    ),
+  startStream: (title?: string) =>
+    fetch(`${API_URL}/api/stream/start`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ title: title ?? null }),
+    }).then((response) => parseJson<unknown>(response)),
   stopStream: () =>
     fetch(`${API_URL}/api/stream/stop`, { method: "POST", headers: authHeaders() }).then((response) =>
       parseJson<unknown>(response)
@@ -130,6 +138,10 @@ export const api = {
   getAnalyticsHistory: () =>
     fetch(`${API_URL}/api/analytics/history`, { headers: authHeaders() }).then((response) =>
       parseJson<ApiStreamHistory[]>(response)
+    ),
+  getBitrateHistory: () =>
+    fetch(`${API_URL}/api/analytics/bitrate`, { headers: authHeaders() }).then((response) =>
+      parseJson<BitrateSample[]>(response)
     ),
 
   // Team

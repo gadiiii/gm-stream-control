@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { Clock, Users, Activity } from "lucide-react"
 import { toast } from "sonner"
 import { api, mapDestination } from "@/lib/api"
@@ -10,6 +10,10 @@ import { StatCard } from "@/components/streaming/stat-card"
 import { StreamControls } from "@/components/streaming/stream-controls"
 import { DestinationCard, type DestinationStatus } from "@/components/streaming/destination-card"
 import { ThumbnailManager } from "@/components/streaming/thumbnail-manager"
+import { GoLiveDialog } from "@/components/streaming/go-live-dialog"
+import { StreamDropAlert } from "@/components/streaming/stream-drop-alert"
+import { BitrateChart } from "@/components/streaming/bitrate-chart"
+import { ObsStatus } from "@/components/streaming/obs-status"
 import { useWebSocket } from "@/components/streaming/websocket-provider"
 
 type Platform = "youtube" | "facebook" | "instagram" | "owncast"
@@ -48,14 +52,30 @@ export default function StreamingDashboard() {
   const [isLoading, setIsLoading] = useState(false)
   const [destinations, setDestinations] = useState<Destination[]>([])
   const [showEmergencyDialog, setShowEmergencyDialog] = useState(false)
+  const [showGoLiveDialog, setShowGoLiveDialog] = useState(false)
+  const [showDropAlert, setShowDropAlert] = useState(false)
 
-  // Use WebSocket data if available, otherwise use local state
   const isLive = streamData?.live ?? false
+  const wasLive = useRef(false)
+  const stoppingIntentionally = useRef(false)
+
   const stats = {
     uptime: streamData ? formatUptime(streamData.uptime_secs) : "00:00:00",
     viewers: streamData?.total_viewers ?? 0,
     bitrate: streamData ? streamData.bitrate_kbps.toLocaleString() : "0",
   }
+
+  // A live → offline transition that we didn't ask for means the encoder dropped.
+  useEffect(() => {
+    if (wasLive.current && !isLive) {
+      if (stoppingIntentionally.current) {
+        stoppingIntentionally.current = false
+      } else {
+        setShowDropAlert(true)
+      }
+    }
+    wasLive.current = isLive
+  }, [isLive])
 
   useEffect(() => {
     const loadDestinations = async () => {
@@ -88,13 +108,13 @@ export default function StreamingDashboard() {
     loadDestinations()
   }, [])
 
-  const handleStartStream = useCallback(async () => {
+  const handleStartStream = useCallback(async (title: string) => {
     setIsLoading(true)
-    
+    setShowGoLiveDialog(false)
+
     try {
-      await api.startStream()
-      
-      // Update destinations to connected if enabled
+      await api.startStream(title || undefined)
+
       setDestinations((prev) =>
         prev.map((d) => ({
           ...d,
@@ -102,7 +122,7 @@ export default function StreamingDashboard() {
           viewers: 0,
         }))
       )
-      toast.success("Stream started")
+      toast.success(title ? `Stream started — ${title}` : "Stream started")
     } catch (error) {
       console.error("Failed to start stream", error)
       toast.error("Failed to start stream. Check your connection.")
@@ -113,10 +133,11 @@ export default function StreamingDashboard() {
 
   const handleStopStream = useCallback(async () => {
     setIsLoading(true)
-    
+    stoppingIntentionally.current = true
+
     try {
       await api.stopStream()
-      
+
       setDestinations((prev) =>
         prev.map((d) => ({
           ...d,
@@ -127,6 +148,7 @@ export default function StreamingDashboard() {
       toast.success("Stream stopped")
     } catch (error) {
       console.error("Failed to stop stream", error)
+      stoppingIntentionally.current = false
       toast.error("Failed to stop stream. Check your connection.")
     } finally {
       setIsLoading(false)
@@ -140,10 +162,11 @@ export default function StreamingDashboard() {
   const confirmEmergencyStop = useCallback(async () => {
     setShowEmergencyDialog(false)
     setIsLoading(true)
-    
+    stoppingIntentionally.current = true
+
     try {
       await api.stopStream()
-      
+
       setDestinations((prev) =>
         prev.map((d) => ({
           ...d,
@@ -154,6 +177,7 @@ export default function StreamingDashboard() {
       toast.warning("Emergency stop activated")
     } catch (error) {
       console.error("Failed to emergency stop", error)
+      stoppingIntentionally.current = false
       toast.error("Failed to stop stream. Check your connection.")
     } finally {
       setIsLoading(false)
@@ -174,11 +198,7 @@ export default function StreamingDashboard() {
               ? {
                   ...d,
                   enabled,
-                  status: isLive
-                    ? enabled
-                      ? "connected"
-                      : "disabled"
-                    : "disabled",
+                  status: isLive && enabled ? "connected" : "disabled",
                   viewers: 0,
                 }
               : d
@@ -194,9 +214,20 @@ export default function StreamingDashboard() {
   )
 
   const totalViewers = stats.viewers || destinations.reduce((sum, d) => sum + d.viewers, 0)
+  const enabledDestinations = destinations.filter((d) => d.enabled).map((d) => d.platform)
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      <StreamDropAlert open={showDropAlert} onDismiss={() => setShowDropAlert(false)} />
+
+      <GoLiveDialog
+        open={showGoLiveDialog}
+        onOpenChange={setShowGoLiveDialog}
+        onConfirm={handleStartStream}
+        enabledDestinations={enabledDestinations}
+        isLoading={isLoading}
+      />
+
       {/* Emergency Stop Confirmation Dialog */}
       {showEmergencyDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
@@ -228,7 +259,7 @@ export default function StreamingDashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <h1 className="font-display text-3xl text-text-primary tracking-wide">
+          <h1 className="font-display text-2xl sm:text-3xl text-text-primary tracking-wide">
             DASHBOARD
           </h1>
           <LiveBadge isLive={isLive} />
@@ -236,7 +267,7 @@ export default function StreamingDashboard() {
         <StreamControls
           isLive={isLive}
           isLoading={isLoading}
-          onStartStream={handleStartStream}
+          onStartStream={() => setShowGoLiveDialog(true)}
           onStopStream={handleStopStream}
           onEmergencyStop={handleEmergencyStop}
         />
@@ -282,26 +313,32 @@ export default function StreamingDashboard() {
               icon={Activity}
             />
           </div>
+
+          <BitrateChart isLive={isLive} />
         </div>
 
-        {/* Right column - Destinations */}
-        <div className="space-y-4">
-          <h2 className="text-sm font-medium text-text-secondary">
-            Destinations
-          </h2>
-          <div className="space-y-3">
-            {destinations.map((destination) => (
-              <DestinationCard
-                key={destination.platform}
-                platform={destination.platform}
-                status={destination.status}
-                viewers={destination.viewers}
-                enabled={destination.enabled}
-                onToggle={(enabled) =>
-                  handleToggleDestination(destination.platform, enabled)
-                }
-              />
-            ))}
+        {/* Right column - Encoder and destinations */}
+        <div className="space-y-6">
+          <ObsStatus isConnected={isLive} streamName={streamData?.stream_name} />
+
+          <div className="space-y-4">
+            <h2 className="text-sm font-medium text-text-secondary">
+              Destinations
+            </h2>
+            <div className="space-y-3">
+              {destinations.map((destination) => (
+                <DestinationCard
+                  key={destination.platform}
+                  platform={destination.platform}
+                  status={destination.status}
+                  viewers={destination.viewers}
+                  enabled={destination.enabled}
+                  onToggle={(enabled) =>
+                    handleToggleDestination(destination.platform, enabled)
+                  }
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>

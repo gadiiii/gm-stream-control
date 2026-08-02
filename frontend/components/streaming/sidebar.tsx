@@ -41,12 +41,23 @@ const navItems = [
   },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  open?: boolean
+  onNavigate?: () => void
+}
+
+export function Sidebar({ open = false, onNavigate }: SidebarProps) {
   const pathname = usePathname()
   const { isConnected } = useWebSocket()
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-surface border-r border-border flex flex-col">
+    <aside
+      className={cn(
+        "fixed left-0 top-0 z-50 h-screen w-64 bg-surface border-r border-border flex flex-col",
+        "transition-transform duration-200 lg:translate-x-0",
+        open ? "translate-x-0" : "-translate-x-full"
+      )}
+    >
       {/* Logo / Brand */}
       <div className="flex items-center gap-3 px-6 h-16 border-b border-border">
         <div className="flex items-center justify-center w-8 h-8 rounded-[6px] bg-accent">
@@ -76,6 +87,7 @@ export function Sidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "flex items-center gap-3 px-3 py-2.5 rounded-[6px] text-sm font-medium transition-colors",
                     isActive
@@ -96,6 +108,7 @@ export function Sidebar() {
       <div className="px-3 py-4 border-t border-border">
         <Link
           href="/streaming/settings"
+          onClick={onNavigate}
           className="flex items-center gap-3 px-3 py-2.5 rounded-[6px] text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-elevated transition-colors"
         >
           <Settings className="w-4 h-4" />
