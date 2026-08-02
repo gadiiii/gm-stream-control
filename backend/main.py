@@ -42,6 +42,7 @@ FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
 CF_TUNNEL_SECRET = os.getenv("CF_TUNNEL_SECRET", "")
+PUBLIC_API_HOST = os.getenv("PUBLIC_API_HOST", "").strip().lower()
 COMPANION_API_KEY = os.getenv("COMPANION_API_KEY", "")
 COMPANION_URL = os.getenv("COMPANION_URL", "")
 COMPANION_BUTTON_GOLIVE = os.getenv("COMPANION_BUTTON_GOLIVE", "")
@@ -69,11 +70,35 @@ app.add_middleware(
 
 _TUNNEL_EXEMPT = {"/api/stream/on_publish", "/api/stream/on_done", "/api/stream/ws"}
 
+
+def arrived_over_the_internet(request: Request) -> bool:
+    """True when the request came in over the public hostname or via Cloudflare.
+
+    Requests made directly to the LXC by IP — from the LAN or Tailscale — are
+    treated as trusted; they can only reach port 8000 from inside the network.
+    """
+    if request.headers.get("CF-Connecting-IP") or request.headers.get("CF-Ray"):
+        return True
+    if not PUBLIC_API_HOST:
+        return False
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    return host == PUBLIC_API_HOST
+
+
 @app.middleware("http")
 async def verify_tunnel_secret(request: Request, call_next):
     path = request.url.path
-    exempt = path in _TUNNEL_EXEMPT or path.startswith("/api/companion/")
-    if CF_TUNNEL_SECRET and not exempt:
+
+    # CORS preflight carries no custom headers by design — it's the request
+    # asking permission to send them. Rejecting it here would surface as an
+    # opaque CORS error, so let CORSMiddleware answer it.
+    exempt = (
+        request.method == "OPTIONS"
+        or path in _TUNNEL_EXEMPT
+        or path.startswith("/api/companion/")
+    )
+
+    if CF_TUNNEL_SECRET and not exempt and arrived_over_the_internet(request):
         if request.headers.get("X-Tunnel-Secret") != CF_TUNNEL_SECRET:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     return await call_next(request)
