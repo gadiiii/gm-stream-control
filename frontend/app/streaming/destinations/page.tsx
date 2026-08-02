@@ -49,7 +49,7 @@ export default function DestinationsPage() {
         setDestinations(data.map(mapDestination))
       } catch (error) {
         console.error("Failed to load destinations", error)
-        toast.error("Failed to load destinations. Check your connection.")
+        toast.error(`Failed to load destinations: ${error instanceof Error ? error.message : "Check your connection."}`)
         setDestinations([])
       } finally {
         setIsLoading(false)
@@ -86,7 +86,7 @@ export default function DestinationsPage() {
       toast.success("Destination updated")
     } catch (error) {
       console.error("Failed to update destination", error)
-      toast.error("Failed to update destination. Check your connection.")
+      toast.error(`Failed to update destination: ${error instanceof Error ? error.message : "Check your connection."}`)
     }
   }, [destinations])
 
@@ -119,7 +119,7 @@ export default function DestinationsPage() {
       toast.success("Destination updated")
     } catch (error) {
       console.error("Failed to update destination", error)
-      toast.error("Failed to update destination. Check your connection.")
+      toast.error(`Failed to update destination: ${error instanceof Error ? error.message : "Check your connection."}`)
     }
   }, [editForm])
 
@@ -131,7 +131,7 @@ export default function DestinationsPage() {
       toast.success("Destination deleted")
     } catch (error) {
       console.error("Failed to delete destination", error)
-      toast.error("Failed to delete destination. Check your connection.")
+      toast.error(`Failed to delete destination: ${error instanceof Error ? error.message : "Check your connection."}`)
     }
   }, [])
 
@@ -148,7 +148,7 @@ export default function DestinationsPage() {
       setDestinations((prev) => [...prev, mapDestination(data)])
     } catch (error) {
       console.error("Failed to add destination", error)
-      toast.error("Failed to add destination. Check your connection.")
+      toast.error(`Failed to add destination: ${error instanceof Error ? error.message : "Check your connection."}`)
       return
     }
 

@@ -42,7 +42,9 @@ export interface Destination {
 
 export interface ApiStreamHistory {
   id: string
+  title?: string | null
   started_at?: string | null
+  ended_at?: string | null
   duration_secs?: number | string | null
   status?: string | null
   peak_viewers?: number | null

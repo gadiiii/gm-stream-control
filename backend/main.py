@@ -38,7 +38,10 @@ FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN", "")
 FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+_frontend_origins_raw = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+FRONTEND_ORIGINS: list[str] = [o.strip() for o in _frontend_origins_raw.split(",") if o.strip()]
+if "http://localhost:3000" not in FRONTEND_ORIGINS:
+    FRONTEND_ORIGINS.append("http://localhost:3000")
 
 THUMBNAIL_PATH = Path(tempfile.gettempdir()) / "gm_stream_thumbnail.jpg"
 
@@ -50,7 +53,7 @@ app = FastAPI(title="GM Stream Control Panel API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://localhost:3000"],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -289,7 +292,6 @@ rtmp {{
             hls_path /tmp/hls;
             hls_fragment 2;
             hls_playlist_length 10;
-            resolver 8.8.8.8 valid=300s ipv6=off;
             on_publish http://127.0.0.1:8000/api/stream/on_publish;
             on_done http://127.0.0.1:8000/api/stream/on_done;
 {pushes}
@@ -342,6 +344,9 @@ async def request_payload(request: Request) -> dict[str, Any]:
 @app.on_event("startup")
 async def startup() -> None:
     asyncio.create_task(poll_nginx_stats())
+    if supabase is not None and NGINX_CONFIG_PATH:
+        with suppress(Exception):
+            await write_nginx_config_and_reload()
 
 
 @app.websocket("/api/stream/ws")

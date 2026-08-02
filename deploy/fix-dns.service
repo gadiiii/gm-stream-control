@@ -1,0 +1,13 @@
+[Unit]
+Description=Fix DNS before network services start
+DefaultDependencies=no
+After=network.target
+Before=nginx.service gm-backend.service gm-frontend.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

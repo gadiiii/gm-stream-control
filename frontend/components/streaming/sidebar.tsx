@@ -3,12 +3,13 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { 
-  Radio, 
-  Settings, 
-  BarChart3, 
+import {
+  Radio,
+  Settings,
+  BarChart3,
   Users,
-  Tv
+  Tv,
+  History
 } from "lucide-react"
 import { useWebSocket } from "./websocket-provider"
 
@@ -27,6 +28,11 @@ const navItems = [
     href: "/streaming/analytics",
     label: "Analytics",
     icon: BarChart3,
+  },
+  {
+    href: "/streaming/history",
+    label: "History",
+    icon: History,
   },
   {
     href: "/streaming/team",
