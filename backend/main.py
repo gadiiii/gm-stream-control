@@ -1,14 +1,16 @@
 import asyncio
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from collections import deque
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 from uuid import UUID
 
@@ -572,6 +574,66 @@ async def delete_destination(id: UUID, _: dict = Depends(get_current_user)) -> d
     deleted = await db_delete("destinations", str(id))
     await write_nginx_config_and_reload()
     return {"deleted": deleted}
+
+
+DEFAULT_RTMP_PORTS = {"rtmp": 1935, "rtmps": 443}
+
+
+async def probe_rtmp_endpoint(rtmp_url: str) -> dict[str, Any]:
+    """Resolve and open a TCP connection to an RTMP endpoint without publishing.
+
+    Catches the failures that otherwise only surface mid-service: a typo'd
+    host, DNS that isn't resolving, or a firewall blocking the port.
+    """
+    parsed = urlparse(rtmp_url.strip())
+    host = parsed.hostname
+    if not host:
+        return {"ok": False, "error": f"Could not parse a hostname from {rtmp_url!r}."}
+
+    port = parsed.port or DEFAULT_RTMP_PORTS.get(parsed.scheme, 1935)
+    started = time.perf_counter()
+
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=6)
+    except asyncio.TimeoutError:
+        return {
+            "ok": False,
+            "host": host,
+            "port": port,
+            "error": f"Timed out connecting to {host}:{port}. Check the port isn't blocked.",
+        }
+    except socket.gaierror:
+        return {
+            "ok": False,
+            "host": host,
+            "port": port,
+            "error": f"Could not resolve {host}. Check the URL, and that DNS works on the server.",
+        }
+    except OSError as exc:
+        return {"ok": False, "host": host, "port": port, "error": f"{host}:{port} — {exc.strerror or exc}"}
+
+    writer.close()
+    with suppress(Exception):
+        await writer.wait_closed()
+
+    return {
+        "ok": True,
+        "host": host,
+        "port": port,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+    }
+
+
+@app.post("/api/destinations/{id}/test")
+async def test_destination(id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
+    rows = await db_execute(
+        get_supabase().table("destinations").select("id,name,rtmp_url").eq("id", str(id))
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Destination not found.")
+
+    result = await probe_rtmp_endpoint(rows[0]["rtmp_url"])
+    return {"id": rows[0]["id"], "name": rows[0]["name"], **result}
 
 
 @app.get("/api/analytics/live")

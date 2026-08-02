@@ -1,9 +1,21 @@
 "use client"
 
 import { useState, useCallback, useEffect } from "react"
-import { Plus, Eye, EyeOff, Pencil, Trash2, Check, X } from "lucide-react"
+import {
+  Plus,
+  Eye,
+  EyeOff,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+  PlugZap,
+  Loader2,
+  CircleCheck,
+  CircleAlert,
+} from "lucide-react"
 import { toast } from "sonner"
-import { api, mapDestination, type Destination } from "@/lib/api"
+import { api, mapDestination, type Destination, type DestinationTestResult } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -33,6 +45,8 @@ export default function DestinationsPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Destination | null>(null)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [testResults, setTestResults] = useState<Record<string, DestinationTestResult>>({})
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
   const [newDestination, setNewDestination] = useState<Omit<Destination, "id">>({
     platform: "",
     rtmpUrl: "",
@@ -163,6 +177,42 @@ export default function DestinationsPage() {
     toast.success("Destination added")
   }, [newDestination])
 
+  const testDestination = useCallback(async (id: string) => {
+    setTestingIds((prev) => new Set(prev).add(id))
+    try {
+      const result = await api.testDestination(id)
+      setTestResults((prev) => ({ ...prev, [id]: result }))
+      if (result.ok) {
+        toast.success(`${result.name} reachable in ${result.latency_ms}ms`)
+      } else {
+        toast.error(result.error ?? "Destination unreachable")
+      }
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Check your connection."
+      setTestResults((prev) => ({ ...prev, [id]: { ok: false, error: message } }))
+      toast.error(`Test failed: ${message}`)
+      return null
+    } finally {
+      setTestingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }, [])
+
+  const testAll = useCallback(async () => {
+    if (destinations.length === 0) return
+    const results = await Promise.all(destinations.map((d) => testDestination(d.id)))
+    const failed = results.filter((r) => r && !r.ok).length
+    if (failed === 0) {
+      toast.success(`All ${destinations.length} destinations reachable`)
+    } else {
+      toast.error(`${failed} of ${destinations.length} destinations unreachable`)
+    }
+  }, [destinations, testDestination])
+
   const maskKey = () => "••••••••••••••••"
 
   return (
@@ -175,7 +225,21 @@ export default function DestinationsPage() {
             Manage your streaming platforms and RTMP endpoints
           </p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            onClick={testAll}
+            disabled={destinations.length === 0 || testingIds.size > 0}
+            className="rounded-[6px] border-border text-text-secondary hover:bg-elevated gap-2"
+          >
+            {testingIds.size > 0 ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <PlugZap className="w-4 h-4" />
+            )}
+            Test All
+          </Button>
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogTrigger asChild>
             <Button className="bg-[#E8440A] hover:bg-[#E8440A]/90 text-white rounded-[6px] gap-2">
               <Plus className="w-4 h-4" />
@@ -245,7 +309,8 @@ export default function DestinationsPage() {
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       {/* Table */}
@@ -257,6 +322,7 @@ export default function DestinationsPage() {
               <TableHead className="text-text-secondary font-medium">RTMP URL</TableHead>
               <TableHead className="text-text-secondary font-medium">Stream Key</TableHead>
               <TableHead className="text-text-secondary font-medium">Title</TableHead>
+              <TableHead className="text-text-secondary font-medium">Reachable</TableHead>
               <TableHead className="text-text-secondary font-medium text-center">Enabled</TableHead>
               <TableHead className="text-text-secondary font-medium text-right">Actions</TableHead>
             </TableRow>
@@ -270,6 +336,7 @@ export default function DestinationsPage() {
                   <TableCell><Skeleton className="h-4 w-40" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                   <TableCell className="text-center"><Skeleton className="h-5 w-9 mx-auto" /></TableCell>
                   <TableCell className="text-right"><Skeleton className="h-8 w-16 ml-auto" /></TableCell>
                 </TableRow>
@@ -308,6 +375,7 @@ export default function DestinationsPage() {
                           className="bg-elevated border-border text-text-primary h-8"
                         />
                       </TableCell>
+                      <TableCell className="text-text-tertiary text-xs">—</TableCell>
                       <TableCell className="text-center">
                         <Switch
                           checked={editForm.enabled}
@@ -368,6 +436,31 @@ export default function DestinationsPage() {
                       <TableCell className="text-text-secondary">
                         {destination.title}
                       </TableCell>
+                      <TableCell>
+                        {testingIds.has(destination.id) ? (
+                          <span className="flex items-center gap-1.5 text-xs text-text-tertiary">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Testing…
+                          </span>
+                        ) : testResults[destination.id] ? (
+                          testResults[destination.id].ok ? (
+                            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+                              <CircleCheck className="w-3.5 h-3.5 shrink-0" />
+                              {testResults[destination.id].latency_ms}ms
+                            </span>
+                          ) : (
+                            <span
+                              title={testResults[destination.id].error}
+                              className="flex items-center gap-1.5 text-xs text-red-400"
+                            >
+                              <CircleAlert className="w-3.5 h-3.5 shrink-0" />
+                              Failed
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-xs text-text-tertiary">Not tested</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-center">
                         <Switch
                           checked={destination.enabled}
@@ -377,6 +470,16 @@ export default function DestinationsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => testDestination(destination.id)}
+                            disabled={testingIds.has(destination.id)}
+                            title="Test reachability"
+                            className="h-8 w-8 text-text-tertiary hover:text-text-secondary hover:bg-elevated"
+                          >
+                            <PlugZap className="w-4 h-4" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"

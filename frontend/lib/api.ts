@@ -51,6 +51,16 @@ export interface ApiStreamHistory {
   total_viewers?: number | null
 }
 
+export interface DestinationTestResult {
+  id?: string
+  name?: string
+  ok: boolean
+  host?: string
+  port?: number
+  latency_ms?: number
+  error?: string
+}
+
 export interface ApiStreamAnalytics {
   id?: string
   stream_id?: string
@@ -121,6 +131,11 @@ export const api = {
     }).then((response) => parseJson<ApiDestination>(response)),
   deleteDestination: (id: string) =>
     fetch(`${API_URL}/api/destinations/${id}`, { method: "DELETE", headers: authHeaders() }),
+  testDestination: (id: string) =>
+    fetch(`${API_URL}/api/destinations/${id}/test`, {
+      method: "POST",
+      headers: authHeaders(),
+    }).then((response) => parseJson<DestinationTestResult>(response)),
 
   // Stream control
   getStreamStatus: () =>
