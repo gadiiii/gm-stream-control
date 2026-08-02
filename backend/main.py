@@ -184,6 +184,7 @@ latest_status = StreamStatus()
 active_stream_id: str | None = None
 active_stream_title: str | None = None
 peak_viewers = 0
+nginx_reload_pending = False
 connected_websockets: set[WebSocket] = set()
 bitrate_history: deque[dict[str, Any]] = deque(maxlen=360)
 
@@ -356,6 +357,11 @@ async def poll_nginx_stats() -> None:
                         "viewers": latest_status.total_viewers,
                     }
                 )
+            elif nginx_reload_pending and failures == 0:
+                # Nothing is publishing now, so the held-back reload is safe to apply.
+                logger.info("Applying deferred nginx reload — no stream is publishing.")
+                await write_nginx_config_and_reload(force=True)
+
             await asyncio.sleep(5)
 
 
@@ -454,14 +460,34 @@ def command_error(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout or "").strip() or f"exit status {result.returncode}"
 
 
-async def write_nginx_config_and_reload() -> dict[str, Any]:
+async def publisher_active() -> bool:
+    """Ask nginx directly whether anything is publishing.
+
+    Deliberately not `latest_status`, which is up to 5s stale and starts out
+    False — at startup that would read as "idle" and reload over a live stream.
+    """
+    with suppress(Exception):
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(RTMP_STAT_URL)
+            response.raise_for_status()
+            return parse_nginx_rtmp_stat(response.text).live
+    return latest_status.live
+
+
+async def write_nginx_config_and_reload(*, force: bool = False) -> dict[str, Any]:
     """Regenerate nginx.conf from the enabled destinations and reload nginx.
 
     Never raises. A reload failure must not fail the caller's request — by the
     time we get here the destination change is already committed, so throwing
     would report failure for a change that actually saved. The outcome is
     returned instead, and logged with nginx's own stderr rather than swallowing it.
+
+    Reloading nginx drops whoever is publishing, so while a stream is live the
+    new config is written but the reload is held until the stream ends. Pass
+    force=True only when applying that deferred reload.
     """
+    global nginx_reload_pending
+
     if not NGINX_CONFIG_PATH:
         return {"ok": True, "skipped": True, "reason": "NGINX_CONFIG_PATH not configured"}
 
@@ -475,6 +501,14 @@ async def write_nginx_config_and_reload() -> dict[str, Any]:
     except Exception as exc:
         logger.error("Could not write %s: %s", config_path, exc)
         return {**result, "ok": False, "error": f"Could not write nginx config: {exc}"}
+
+    if not force and await publisher_active():
+        nginx_reload_pending = True
+        logger.warning(
+            "Wrote nginx config but deferred the reload — a stream is publishing and "
+            "reloading would drop it. Will apply when the stream ends."
+        )
+        return {**result, "ok": True, "deferred": True}
 
     # Validate before reloading, and put the old config back if it's bad — otherwise
     # a later nginx restart would fail on a file we wrote.
@@ -503,6 +537,7 @@ async def write_nginx_config_and_reload() -> dict[str, Any]:
             return {**result, "ok": False, "error": f"nginx reload failed: {error}"}
         logger.warning("nginx -s reload failed (%s); reloaded via systemctl", command_error(reload))
 
+    nginx_reload_pending = False
     return {**result, "ok": True}
 
 
