@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   LineChart,
   Line,
@@ -38,12 +38,20 @@ interface ViewerDataPoint {
 interface StreamHistoryRow {
   id: string
   date: string
+  startedAt: number
   startTime: string
   duration: string
   durationSecs: number
   status: string
   peakViewers: number
   totalViews: number
+}
+
+const RANGE_DAYS: Record<string, number> = {
+  "24h": 1,
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
 }
 
 function toNumber(value: number | string | null | undefined): number {
@@ -65,6 +73,7 @@ function mapStreamHistory(stream: ApiStreamHistory): StreamHistoryRow {
   return {
     id: stream.id,
     date: startedAt ? startedAt.toISOString().split("T")[0] : "",
+    startedAt: startedAt ? startedAt.getTime() : 0,
     startTime: startedAt
       ? startedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
       : "",
@@ -134,28 +143,23 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
 
 export default function AnalyticsPage() {
   const [timeRange, setTimeRange] = useState("7d")
-  const [streamHistory, setStreamHistory] = useState<StreamHistoryRow[]>([])
-  const [viewerData, setViewerData] = useState<ViewerDataPoint[]>([])
+  const [allStreams, setAllStreams] = useState<StreamHistoryRow[]>([])
+  const [destinationCount, setDestinationCount] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const loadHistory = async () => {
       try {
-        const data = await api.getAnalyticsHistory()
-        const rows = data.map(mapStreamHistory)
-        setStreamHistory(rows)
-        setViewerData(
-          rows
-            .filter((r) => r.date)
-            .slice()
-            .sort((a, b) => a.date.localeCompare(b.date))
-            .map((r) => ({ date: r.date, viewers: r.peakViewers }))
-        )
+        const [history, destinations] = await Promise.all([
+          api.getAnalyticsHistory(),
+          api.getDestinations().catch(() => []),
+        ])
+        setAllStreams(history.map(mapStreamHistory))
+        setDestinationCount(destinations.length)
       } catch (error) {
         console.error("Failed to load analytics history", error)
         toast.error("Failed to load analytics. Check your connection.")
-        setStreamHistory([])
-        setViewerData([])
+        setAllStreams([])
       } finally {
         setIsLoading(false)
       }
@@ -164,11 +168,26 @@ export default function AnalyticsPage() {
     loadHistory()
   }, [])
 
+  const streamHistory = useMemo(() => {
+    const days = RANGE_DAYS[timeRange] ?? 7
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+    return allStreams.filter((s) => s.startedAt >= cutoff)
+  }, [allStreams, timeRange])
+
+  const viewerData = useMemo<ViewerDataPoint[]>(
+    () =>
+      streamHistory
+        .filter((r) => r.date)
+        .slice()
+        .sort((a, b) => a.startedAt - b.startedAt)
+        .map((r) => ({ date: r.date, viewers: r.peakViewers })),
+    [streamHistory]
+  )
+
   const peakViewers = Math.max(0, ...streamHistory.map((s) => s.peakViewers))
   const totalDuration = streamHistory.reduce((acc, s) => acc + Math.floor(s.durationSecs / 60), 0)
   const totalHours = Math.floor(totalDuration / 60)
   const totalMins = totalDuration % 60
-  const platformsUsed = 0
 
   return (
     <div className="space-y-6">
@@ -202,8 +221,8 @@ export default function AnalyticsPage() {
           icon={Clock}
         />
         <StatCard
-          label="Platforms Used"
-          value={platformsUsed.toString()}
+          label="Destinations"
+          value={destinationCount.toString()}
           icon={Monitor}
         />
       </div>
@@ -217,7 +236,9 @@ export default function AnalyticsPage() {
         <div className="h-[350px]">
           {viewerData.length === 0 ? (
             <div className="h-full flex items-center justify-center text-text-secondary text-sm">
-              No stream data yet — viewer trends will appear here after your first stream
+              {allStreams.length > 0
+                ? "No streams in this time range — try a longer one"
+                : "No stream data yet — viewer trends will appear here after your first stream"}
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
@@ -311,7 +332,9 @@ export default function AnalyticsPage() {
             ) : (
               <TableRow className="border-border">
                 <TableCell colSpan={6} className="py-12 text-center text-text-secondary">
-                  No stream history yet
+                  {allStreams.length > 0
+                    ? "No streams in this time range"
+                    : "No stream history yet"}
                 </TableCell>
               </TableRow>
             )}

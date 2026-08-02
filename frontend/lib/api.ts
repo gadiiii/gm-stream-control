@@ -51,6 +51,14 @@ export interface ApiStreamHistory {
   total_viewers?: number | null
 }
 
+export interface ApiStreamAnalytics {
+  id?: string
+  stream_id?: string
+  recorded_at?: string | null
+  viewer_count?: number | null
+  bitrate_kbps?: number | null
+}
+
 export interface BitrateSample {
   t: string | null
   bitrate_kbps: number
@@ -142,6 +150,10 @@ export const api = {
   getBitrateHistory: () =>
     fetch(`${API_URL}/api/analytics/bitrate`, { headers: authHeaders() }).then((response) =>
       parseJson<BitrateSample[]>(response)
+    ),
+  getStreamAnalytics: (id: string) =>
+    fetch(`${API_URL}/api/analytics/stream/${id}`, { headers: authHeaders() }).then((response) =>
+      parseJson<ApiStreamAnalytics[]>(response)
     ),
 
   // Team

@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Search } from "lucide-react"
 import { toast } from "sonner"
 import { api, type ApiStreamHistory } from "@/lib/api"
@@ -74,6 +75,7 @@ function mapSession(stream: ApiStreamHistory): StreamSession {
 }
 
 export default function HistoryPage() {
+  const router = useRouter()
   const [sessions, setSessions] = useState<StreamSession[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState("")
@@ -179,9 +181,13 @@ export default function HistoryPage() {
               ))
             ) : filteredSessions.length > 0 ? (
               filteredSessions.map((session) => (
-                <TableRow key={session.id} className="border-border hover:bg-elevated/50">
+                <TableRow
+                  key={session.id}
+                  onClick={() => router.push(`/streaming/history/${session.id}`)}
+                  className="border-border hover:bg-elevated/50 cursor-pointer"
+                >
                   <TableCell className="text-text-primary font-medium">
-                    {session.title}
+                    <span className="underline-offset-4 hover:underline">{session.title}</span>
                   </TableCell>
                   <TableCell className="font-mono text-sm text-text-secondary">
                     {session.date}
