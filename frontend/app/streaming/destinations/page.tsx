@@ -106,7 +106,9 @@ export default function DestinationsPage() {
 
   const startEditing = useCallback((destination: Destination) => {
     setEditingId(destination.id)
-    setEditForm({ ...destination })
+    // streamKey from the API is ciphertext, never the plaintext key. Start blank
+    // rather than round-tripping it — saving it back would double-encrypt it.
+    setEditForm({ ...destination, streamKey: "" })
   }, [])
 
   const cancelEditing = useCallback(() => {
@@ -121,7 +123,10 @@ export default function DestinationsPage() {
       const data = await api.updateDestination(editForm.id, {
         name: editForm.platform,
         rtmp_url: editForm.rtmpUrl,
-        stream_key: editForm.streamKey,
+        // Omit when blank so the backend leaves the stored key untouched —
+        // the field starts empty on every edit since it never holds the
+        // real plaintext key (see startEditing).
+        ...(editForm.streamKey ? { stream_key: editForm.streamKey } : {}),
         enabled: editForm.enabled,
       })
       const updatedDestination = mapDestination(data)
@@ -365,6 +370,7 @@ export default function DestinationsPage() {
                           value={editForm.streamKey}
                           onChange={(e) => setEditForm({ ...editForm, streamKey: e.target.value })}
                           type="password"
+                          placeholder="Leave blank to keep current key"
                           className="bg-elevated border-border text-text-primary font-mono text-xs h-8"
                         />
                       </TableCell>

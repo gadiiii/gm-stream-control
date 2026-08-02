@@ -242,7 +242,24 @@ async def trigger_companion_button(button: str) -> None:
 
 
 def encrypt_stream_key(stream_key: str) -> str:
-    return get_fernet().encrypt(stream_key.encode()).decode()
+    fernet = get_fernet()
+    # A value that itself decrypts successfully is virtually never a real
+    # platform key — it's ciphertext a client sent back unchanged (e.g. an
+    # edit form round-tripping the encrypted value from a GET). Encrypting
+    # it again would silently store double-encrypted garbage.
+    try:
+        fernet.decrypt(stream_key.encode())
+    except Exception:
+        pass
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This value is already an encrypted stream key, not a plaintext one. "
+                "Omit stream_key to keep the existing key unchanged."
+            ),
+        )
+    return fernet.encrypt(stream_key.encode()).decode()
 
 
 def decrypt_stream_key(encrypted_stream_key: str) -> str:
