@@ -441,16 +441,69 @@ http {{
 """
 
 
+def run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: command not found")
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"{cmd[0]}: timed out")
+
+
+def command_error(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or result.stdout or "").strip() or f"exit status {result.returncode}"
+
+
 async def write_nginx_config_and_reload() -> dict[str, Any]:
+    """Regenerate nginx.conf from the enabled destinations and reload nginx.
+
+    Never raises. A reload failure must not fail the caller's request — by the
+    time we get here the destination change is already committed, so throwing
+    would report failure for a change that actually saved. The outcome is
+    returned instead, and logged with nginx's own stderr rather than swallowing it.
+    """
     if not NGINX_CONFIG_PATH:
-        return {"skipped": True, "reason": "NGINX_CONFIG_PATH not configured"}
+        return {"ok": True, "skipped": True, "reason": "NGINX_CONFIG_PATH not configured"}
 
     destinations = await get_enabled_destinations()
     config_path = Path(NGINX_CONFIG_PATH)
-    config_text = build_nginx_config(destinations)
-    await asyncio.to_thread(config_path.write_text, config_text)
-    await asyncio.to_thread(subprocess.run, ["nginx", "-s", "reload"], check=True)
-    return {"destination_count": len(destinations), "config_path": str(config_path)}
+    result: dict[str, Any] = {"destination_count": len(destinations), "config_path": str(config_path)}
+
+    try:
+        previous = await asyncio.to_thread(config_path.read_text) if config_path.exists() else None
+        await asyncio.to_thread(config_path.write_text, build_nginx_config(destinations))
+    except Exception as exc:
+        logger.error("Could not write %s: %s", config_path, exc)
+        return {**result, "ok": False, "error": f"Could not write nginx config: {exc}"}
+
+    # Validate before reloading, and put the old config back if it's bad — otherwise
+    # a later nginx restart would fail on a file we wrote.
+    test = await asyncio.to_thread(run_command, ["nginx", "-t"])
+    if test.returncode != 0:
+        error = command_error(test)
+        logger.error("Generated nginx config is invalid, rolling back: %s", error)
+        if previous is not None:
+            with suppress(Exception):
+                await asyncio.to_thread(config_path.write_text, previous)
+        return {**result, "ok": False, "error": f"Generated nginx config is invalid: {error}"}
+
+    reload = await asyncio.to_thread(run_command, ["nginx", "-s", "reload"])
+    if reload.returncode != 0:
+        # `nginx -s reload` needs the pid file and fails if nginx was started
+        # another way; systemctl is the more reliable path when it's available.
+        fallback = await asyncio.to_thread(run_command, ["systemctl", "reload", "nginx"])
+        if fallback.returncode != 0:
+            error = command_error(reload)
+            logger.error(
+                "nginx reload failed: %s (systemctl fallback: %s). Config on disk is "
+                "correct and will load on next restart.",
+                error,
+                command_error(fallback),
+            )
+            return {**result, "ok": False, "error": f"nginx reload failed: {error}"}
+        logger.warning("nginx -s reload failed (%s); reloaded via systemctl", command_error(reload))
+
+    return {**result, "ok": True}
 
 
 async def request_payload(request: Request) -> dict[str, Any]:
