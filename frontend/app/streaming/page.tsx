@@ -14,6 +14,7 @@ import { GoLiveDialog } from "@/components/streaming/go-live-dialog"
 import { StreamDropAlert } from "@/components/streaming/stream-drop-alert"
 import { BitrateChart } from "@/components/streaming/bitrate-chart"
 import { ObsStatus } from "@/components/streaming/obs-status"
+import { StreamHealth } from "@/components/streaming/stream-health"
 import { useWebSocket } from "@/components/streaming/websocket-provider"
 
 type Platform = "youtube" | "facebook" | "instagram" | "owncast"
@@ -272,6 +273,8 @@ export default function StreamingDashboard() {
           onEmergencyStop={handleEmergencyStop}
         />
       </div>
+
+      <StreamHealth isLive={isLive} bitrate={streamData?.bitrate_kbps ?? 0} />
 
       {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
