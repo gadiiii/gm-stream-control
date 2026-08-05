@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useState, useCallback, useEffect, useRef } from "react"
 import { Clock, Users, Activity } from "lucide-react"
 import { toast } from "sonner"
@@ -185,35 +186,6 @@ export default function StreamingDashboard() {
     }
   }, [])
 
-  const handleToggleDestination = useCallback(
-    async (platform: Platform, enabled: boolean) => {
-      const destination = destinations.find((d) => d.platform === platform)
-      if (!destination) return
-
-      try {
-        await api.updateDestination(destination.id, { enabled })
-
-        setDestinations((prev) =>
-          prev.map((d) =>
-            d.platform === platform
-              ? {
-                  ...d,
-                  enabled,
-                  status: isLive && enabled ? "connected" : "disabled",
-                  viewers: 0,
-                }
-              : d
-          )
-        )
-        toast.success("Destination updated")
-      } catch (error) {
-        console.error("Failed to update destination", error)
-        toast.error("Failed to update destination. Check your connection.")
-      }
-    },
-    [isLive, destinations]
-  )
-
   const totalViewers = stats.viewers || destinations.reduce((sum, d) => sum + d.viewers, 0)
   const enabledDestinations = destinations.filter((d) => d.enabled).map((d) => d.platform)
 
@@ -325,9 +297,17 @@ export default function StreamingDashboard() {
           <ObsStatus isConnected={isLive} streamName={streamData?.stream_name} />
 
           <div className="space-y-4">
-            <h2 className="text-sm font-medium text-text-secondary">
-              Destinations
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-text-secondary">
+                Destinations
+              </h2>
+              <Link
+                href="/streaming/destinations"
+                className="text-xs font-medium text-accent hover:underline"
+              >
+                Manage
+              </Link>
+            </div>
             <div className="space-y-3">
               {destinations.map((destination) => (
                 <DestinationCard
@@ -336,9 +316,6 @@ export default function StreamingDashboard() {
                   status={destination.status}
                   viewers={destination.viewers}
                   enabled={destination.enabled}
-                  onToggle={(enabled) =>
-                    handleToggleDestination(destination.platform, enabled)
-                  }
                 />
               ))}
             </div>
