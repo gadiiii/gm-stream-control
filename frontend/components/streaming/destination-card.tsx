@@ -11,7 +11,9 @@ interface DestinationCardProps {
   status: DestinationStatus
   viewers: number
   enabled: boolean
-  onToggle: (enabled: boolean) => void
+  /** Omit to render read-only (status display only, no switch) — used on the
+   * dashboard, where the Destinations page is the single place `enabled` changes. */
+  onToggle?: (enabled: boolean) => void
   className?: string
 }
 
@@ -97,11 +99,21 @@ export function DestinationCard({
           </div>
         </div>
       </div>
-      <Switch
-        checked={enabled && status === "connected"}
-        onCheckedChange={onToggle}
-        className="data-[state=checked]:bg-accent data-[state=unchecked]:bg-[#333333]"
-      />
+      {onToggle ? (
+        <Switch
+          checked={enabled}
+          onCheckedChange={onToggle}
+          className="data-[state=checked]:bg-accent data-[state=unchecked]:bg-[#333333]"
+        />
+      ) : (
+        <span
+          className={cn(
+            "w-2 h-2 rounded-full shrink-0",
+            enabled ? "bg-emerald-500" : "bg-[#444444]"
+          )}
+          title={enabled ? "Enabled — manage in Destinations" : "Disabled — manage in Destinations"}
+        />
+      )}
     </div>
   )
 }
