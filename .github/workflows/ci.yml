@@ -27,6 +27,13 @@ jobs:
       # Re-add this once that's fixed: `npm run lint`.
       - run: npx tsc --noEmit
       - run: npm run build
+        env:
+          # lib/supabase.ts calls createClient() eagerly at module scope, which
+          # throws on an empty URL — and that module gets pulled into the
+          # prerendered /_not-found page. These are placeholders only; the
+          # build never actually contacts Supabase.
+          NEXT_PUBLIC_SUPABASE_URL: "https://placeholder.supabase.co"
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: "placeholder-anon-key"
 
   backend:
     name: Backend (import check)
