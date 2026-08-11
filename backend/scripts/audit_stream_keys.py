@@ -13,12 +13,29 @@ Nothing is modified. Fix a flagged destination by re-entering its key in the
 control panel.
 
     cd backend && python scripts/audit_stream_keys.py
+
+On the server, use the virtualenv's interpreter — the system python3 has none of
+the dependencies installed:
+
+    cd /opt/gm-stream-control/backend && .venv/bin/python scripts/audit_stream_keys.py
 """
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BACKEND = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND))
+
+try:
+    import httpx  # noqa: F401
+except ModuleNotFoundError:
+    venv_python = BACKEND / ".venv" / "bin" / "python"
+    hint = (
+        f"Run it with the virtualenv instead:\n\n    {venv_python} {Path(__file__).name}\n"
+        if venv_python.exists()
+        else "Install the dependencies first:  pip install -r requirements.txt\n"
+    )
+    sys.exit(f"\nThis interpreter is missing the backend's dependencies.\n\n{hint}")
 
 from main import get_fernet, get_supabase  # noqa: E402
 
