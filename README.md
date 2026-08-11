@@ -49,6 +49,7 @@ destinations, with no church equipment involved — see
 
 | | |
 |---|---|
+| [friday-field-checklist.md](docs/friday-field-checklist.md) | Step-by-step to walk the cable path and pinpoint where it degrades |
 | [onsite-runbook.md](docs/onsite-runbook.md) | Ordered checklist for a visit to the church, when time is short |
 | [access-and-ingest.md](docs/access-and-ingest.md) | Reaching the panel and publishing to it over Tailscale, with nothing exposed publicly |
 | [interbuilding-link.md](docs/interbuilding-link.md) | The cable run between buildings — the suspected root fault |
