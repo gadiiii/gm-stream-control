@@ -49,6 +49,7 @@ destinations, with no church equipment involved — see
 
 | | |
 |---|---|
+| [access-and-ingest.md](docs/access-and-ingest.md) | Reaching the panel and publishing to it over Tailscale, with nothing exposed publicly |
 | [network-check.md](docs/network-check.md) | Pre-service checks, the way a stream actually stresses the link |
 | [stress-test.md](docs/stress-test.md) | Trials to find your safe bitrate, and to separate encoder limits from uplink limits |
 | [srt-ingest.md](docs/srt-ingest.md) | SRT instead of RTMP for the church→server hop, so a bad uplink stops killing the stream |
