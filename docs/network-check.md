@@ -12,6 +12,19 @@ cable, possibly different VLAN. SSH in first:
 ssh root@<server-ip>
 ```
 
+## Start here on a shared connection
+
+If the building's network is the suspect, run the diagnostic first — it covers
+everything below plus the one thing a speed test cannot show:
+
+```bash
+./scripts/netdiag.sh --server <your-server-address> --bitrate 6000
+```
+
+Run it **on the church encoder box**. See
+[diagnosing a shared connection](#diagnosing-a-shared-building-connection) at the
+end for what each result means.
+
 ## What the stream actually needs
 
 | | |
@@ -166,3 +179,57 @@ both real, and neither shows up in a quiet Tuesday-afternoon test.
 To rehearse any of this without touching church equipment, use
 [`test-env/`](../test-env/README.md) — it runs the same fan-out end to end
 against local sinks and asserts the result.
+
+
+---
+
+## Diagnosing a shared building connection
+
+`scripts/netdiag.sh` checks, in order of how likely each is to be the problem:
+
+1. **Connection shape** — double NAT and CGNAT. You run pfSense behind the
+   building owner's router, which is double NAT by definition. It breaks NAT
+   traversal (Tailscale falls back to a relay) and rules out inbound connections.
+2. **Idle latency and loss** — loss with no traffic is physical: a cable, a
+   switch port, or wifi. Fix that before looking anywhere else.
+3. **Path to the platforms** — per-hop loss and jitter to YouTube and Facebook.
+4. **MTU** — a path that can't carry 1500-byte packets mostly works and then
+   stalls on sustained transfers. Common with PPPoE or stacked routers.
+5. **Bufferbloat** — latency measured while the uplink is saturated at your real
+   bitrate.
+
+### Bufferbloat is the one to watch
+
+A connection can pass every speed test and still kill a stream. The moment the
+upstream queue fills, packets sit in a buffer instead of being dropped, latency
+climbs into the hundreds of milliseconds, and RTMP gives up. It presents exactly
+as "the internet just gave up."
+
+Crucially, **this is not a bandwidth shortage** — buying more speed does not fix
+it, which is why it survives so many rounds of troubleshooting.
+
+| Latency rise under load | Verdict |
+|---|---|
+| under 30 ms | Fine |
+| 30–100 ms | Usable, thin margin when the building is busy |
+| over 100 ms | This is very likely your failure |
+
+### Fixing it on pfSense
+
+In order of effect:
+
+1. **Enable FQ-CoDel on the WAN interface.** Firewall → Traffic Shaper →
+   Limiters. Set the upload limit to about **90% of your real measured upload**
+   — deliberately under, so the queue lives in pfSense where it can be managed
+   rather than in the building's router where it cannot. This alone usually
+   removes the problem.
+2. **Prioritise the encoder box** so general building traffic yields to it.
+3. **Lower the stream bitrate** until the latency rise drops below 100 ms.
+
+### Double NAT
+
+Being behind two routers is worth fixing regardless. Ask the building owner to
+either bridge their router or put your pfSense WAN address in their DMZ. If they
+use CGNAT, inbound is impossible no matter what — which is an argument for
+keeping everything on Tailscale, as
+[access-and-ingest.md](access-and-ingest.md) describes.
