@@ -3,6 +3,11 @@
 If `scripts/netdiag.sh` reports latency rising more than ~100 ms under load,
 this is the playbook.
 
+> **Check [the inter-building link](interbuilding-link.md) first.** Physical
+> errors cause retransmits, which inflate the bufferbloat measurement. Shaping
+> manages a queue on a healthy link; it does nothing for one that is corrupting
+> packets.
+
 ## What is actually happening
 
 Somewhere upstream of you there is a buffer that is too large. When you saturate

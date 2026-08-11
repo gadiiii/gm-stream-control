@@ -51,6 +51,7 @@ destinations, with no church equipment involved — see
 |---|---|
 | [onsite-runbook.md](docs/onsite-runbook.md) | Ordered checklist for a visit to the church, when time is short |
 | [access-and-ingest.md](docs/access-and-ingest.md) | Reaching the panel and publishing to it over Tailscale, with nothing exposed publicly |
+| [interbuilding-link.md](docs/interbuilding-link.md) | The cable run between buildings — the suspected root fault |
 | [bufferbloat.md](docs/bufferbloat.md) | Fixing the failure mode where more bandwidth never helped |
 | [network-check.md](docs/network-check.md) | Pre-service checks, the way a stream actually stresses the link |
 | [stress-test.md](docs/stress-test.md) | Trials to find your safe bitrate, and to separate encoder limits from uplink limits |

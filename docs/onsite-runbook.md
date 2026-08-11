@@ -40,6 +40,22 @@ tailscale ping <server-name>
     with **Static Port** enabled (default port rewriting breaks hole punching)
   - Re-run after each change.
 
+## 1b. Check the inter-building cable — 5 minutes
+
+Cabling directly at the main building gave ~50–90 up and down; through the
+inter-building run it is ~10 down, 30–50 up. Download slower than upload is
+abnormal and points at a physical fault, so check this **before** interpreting
+anything else — errors on this segment will distort every other measurement.
+
+On pfSense, **Status → Interfaces**:
+
+- Media should read `1000baseT <full-duplex>`. `100baseTX` or `half-duplex` is
+  the fault.
+- Note in/out errors and collisions, wait five minutes under load, note them
+  again. Anything *increasing* means a bad or over-length cable.
+
+Full detail and the fix options: [interbuilding-link.md](interbuilding-link.md).
+
 ## 2. Diagnose the building connection — 5 minutes
 
 The main event. Run it on the encoder box:
