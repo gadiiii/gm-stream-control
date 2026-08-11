@@ -150,3 +150,11 @@ backend/supabase/.temp/
 
 # macOS
 .DS_Store
+
+# Test environment secrets and real platform keys
+test-env/.env
+test-env/real-destinations.local.json
+test-env/.stream.log
+
+# Claude Code scratch worktrees
+.claude/worktrees/

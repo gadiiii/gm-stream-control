@@ -1,0 +1,48 @@
+# SRT ingest, forwarded into nginx-rtmp.
+#
+# This is the open equivalent of what Resi sells: a transport that survives a
+# lossy link. SRT retransmits lost packets within a latency window, so a brief
+# dip on the church uplink becomes a few late packets instead of a dead stream.
+# RTMP has no such recovery — one bad moment and the connection is gone.
+#
+# Path: OBS --srt--> MediaMTX (here) --rtmp--> nginx-rtmp --push--> platforms
+#
+# MediaMTX only moves packets; it does not re-encode, so the bitrate is whatever
+# the encoder sends and nginx-rtmp keeps doing the fan-out unchanged.
+
+logLevel: info
+logDestinations: [stdout]
+
+# SRT ingest — the only port that faces the internet. UDP.
+srt: yes
+srtAddress: :8890
+
+# RTSP is bound to localhost purely so the forwarder below has something to read
+# from. Not exposed.
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
+
+# Everything else off — this box is internet-reachable and these listeners
+# are not used. MoQ in particular binds extra UDP ports by default.
+rtmp: no
+hls: no
+webrtc: no
+moq: no
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+paths:
+  live:
+    source: publisher
+    # Hand the stream straight to nginx-rtmp, which owns the fan-out. `-c copy`
+    # means no re-encode: same bitrate, same quality, negligible CPU.
+    runOnAvailable: >
+      ffmpeg -hide_banner -loglevel warning
+      -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
+      -c copy -f flv rtmp://server:1935/live/$MTX_PATH
+    runOnAvailableRestart: yes
+
+# Copy of deploy/mediamtx.yml with the forward pointed at the `server`
+# container instead of localhost. Keep in sync with the real one.
