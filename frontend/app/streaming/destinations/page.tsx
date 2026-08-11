@@ -227,12 +227,30 @@ export default function DestinationsPage() {
   const testAll = useCallback(async () => {
     if (destinations.length === 0) return
     const results = await Promise.all(destinations.map((d) => testDestination(d.id)))
-    const failed = results.filter((r) => r && !r.ok).length
-    if (failed === 0) {
-      toast.success(`All ${destinations.length} destinations reachable`)
-    } else {
-      toast.error(`${failed} of ${destinations.length} destinations unreachable`)
+    const failed = results.filter((r) => r && !r.ok)
+
+    if (failed.length === 0) {
+      const confirmed = results.filter((r) => r?.key_status === "ok").length
+      toast.success(
+        confirmed === destinations.length
+          ? `All ${destinations.length} destinations accepted their stream key`
+          : `All ${destinations.length} destinations reachable (${confirmed} key(s) confirmed)`
+      )
+      return
     }
+
+    // Say which failure it is. "Unreachable" for a rejected key sends you
+    // hunting the network when the problem is the key or the URL.
+    const rejected = failed.filter((r) => r?.key_status === "rejected").length
+    const unreadable = failed.filter((r) => r?.key_status === "unreadable").length
+    const unreachable = failed.length - rejected - unreadable
+    const parts = [
+      rejected && `${rejected} rejected the stream key`,
+      unreadable && `${unreadable} has an unreadable stored key`,
+      unreachable && `${unreachable} unreachable`,
+    ].filter(Boolean)
+
+    toast.error(`${failed.length} of ${destinations.length} failed — ${parts.join(", ")}`)
   }, [destinations, testDestination])
 
   const maskKey = () => "••••••••••••••••"
