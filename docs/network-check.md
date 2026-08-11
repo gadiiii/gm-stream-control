@@ -216,6 +216,8 @@ it, which is why it survives so many rounds of troubleshooting.
 
 ### Fixing it on pfSense
 
+Full playbook: [bufferbloat.md](bufferbloat.md).
+
 In order of effect:
 
 1. **Enable FQ-CoDel on the WAN interface.** Firewall → Traffic Shaper →

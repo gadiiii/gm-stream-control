@@ -61,7 +61,8 @@ If it is over 100 ms, go to step 3. Otherwise skip to step 4.
 
 ## 3. Fix bufferbloat on pfSense — 10 minutes
 
-Only if step 2 said so.
+Only if step 2 said so. Full playbook, including what to do when the bloat is
+the building's traffic rather than yours: [bufferbloat.md](bufferbloat.md).
 
 1. Note your **real measured upload** from the netdiag output.
 2. Firewall → Traffic Shaper → Limiters → new limiter, **FQ-CoDel**, bandwidth
