@@ -3,8 +3,6 @@
 import { useState, useCallback, useEffect } from "react"
 import {
   Plus,
-  Eye,
-  EyeOff,
   Pencil,
   Trash2,
   Check,
@@ -15,7 +13,13 @@ import {
   CircleAlert,
 } from "lucide-react"
 import { toast } from "sonner"
-import { api, mapDestination, type Destination, type DestinationTestResult } from "@/lib/api"
+import {
+  api,
+  mapDestination,
+  type Destination,
+  type DestinationTestResult,
+  type NginxResult,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -41,7 +45,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 export default function DestinationsPage() {
   const [destinations, setDestinations] = useState<Destination[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Destination | null>(null)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
@@ -51,7 +54,7 @@ export default function DestinationsPage() {
     platform: "",
     rtmpUrl: "",
     streamKey: "",
-    title: "",
+    hasStreamKey: false,
     enabled: false,
   })
 
@@ -73,16 +76,24 @@ export default function DestinationsPage() {
     fetchDestinations()
   }, [])
 
-  const toggleKeyVisibility = useCallback((id: string) => {
-    setVisibleKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
+  /** The backend regenerates nginx.conf after every change, but holds the
+   * reload while a stream is publishing — reloading would drop it. Say so,
+   * otherwise the change looks applied when it is only queued. */
+  const reportNginxOutcome = useCallback((result: NginxResult | undefined) => {
+    if (!result) return
+    if (result.deferred) {
+      toast.info("Saved. This takes effect when the current stream ends — reloading now would drop it.")
+      return
+    }
+    if (result.skipped_destinations?.length) {
+      toast.warning(
+        `Not streaming to ${result.skipped_destinations.join(", ")} — stream key could not be read. Re-enter it.`
+      )
+      return
+    }
+    if (result.ok === false && result.error) {
+      toast.warning(`Saved, but nginx did not reload: ${result.error}`)
+    }
   }, [])
 
   const toggleEnabled = useCallback(async (id: string) => {
@@ -98,11 +109,12 @@ export default function DestinationsPage() {
         prev.map((d) => (d.id === id ? updatedDestination : d))
       )
       toast.success("Destination updated")
+      reportNginxOutcome(data.nginx)
     } catch (error) {
       console.error("Failed to update destination", error)
       toast.error(`Failed to update destination: ${error instanceof Error ? error.message : "Check your connection."}`)
     }
-  }, [destinations])
+  }, [destinations, reportNginxOutcome])
 
   const startEditing = useCallback((destination: Destination) => {
     setEditingId(destination.id)
@@ -136,11 +148,12 @@ export default function DestinationsPage() {
       setEditingId(null)
       setEditForm(null)
       toast.success("Destination updated")
+      reportNginxOutcome(data.nginx)
     } catch (error) {
       console.error("Failed to update destination", error)
       toast.error(`Failed to update destination: ${error instanceof Error ? error.message : "Check your connection."}`)
     }
-  }, [editForm])
+  }, [editForm, reportNginxOutcome])
 
   const deleteDestination = useCallback(async (id: string) => {
     try {
@@ -175,7 +188,7 @@ export default function DestinationsPage() {
       platform: "",
       rtmpUrl: "",
       streamKey: "",
-      title: "",
+      hasStreamKey: false,
       enabled: false,
     })
     setIsAddDialogOpen(false)
@@ -187,10 +200,14 @@ export default function DestinationsPage() {
     try {
       const result = await api.testDestination(id)
       setTestResults((prev) => ({ ...prev, [id]: result }))
-      if (result.ok) {
-        toast.success(`${result.name} reachable in ${result.latency_ms}ms`)
+      if (result.ok && result.key_status === "ok") {
+        toast.success(`${result.name}: the platform accepted this stream key`)
+      } else if (result.ok) {
+        toast.warning(
+          `${result.name} is reachable, but the key could not be confirmed. ${result.warning ?? ""}`.trim()
+        )
       } else {
-        toast.error(result.error ?? "Destination unreachable")
+        toast.error(result.key_detail ?? result.error ?? "Destination unreachable")
       }
       return result
     } catch (error) {
@@ -287,15 +304,6 @@ export default function DestinationsPage() {
                   className="bg-elevated border-border text-text-primary font-mono text-sm"
                 />
               </div>
-              <div className="space-y-2">
-                <label className="text-sm text-text-secondary">Title / Description</label>
-                <Input
-                  value={newDestination.title}
-                  onChange={(e) => setNewDestination({ ...newDestination, title: e.target.value })}
-                  placeholder="e.g., Sunday Service"
-                  className="bg-elevated border-border text-text-primary"
-                />
-              </div>
             </div>
             <DialogFooter>
               <Button
@@ -326,8 +334,7 @@ export default function DestinationsPage() {
               <TableHead className="text-text-secondary font-medium">Platform</TableHead>
               <TableHead className="text-text-secondary font-medium">RTMP URL</TableHead>
               <TableHead className="text-text-secondary font-medium">Stream Key</TableHead>
-              <TableHead className="text-text-secondary font-medium">Title</TableHead>
-              <TableHead className="text-text-secondary font-medium">Reachable</TableHead>
+              <TableHead className="text-text-secondary font-medium">Pre-flight</TableHead>
               <TableHead className="text-text-secondary font-medium text-center">Enabled</TableHead>
               <TableHead className="text-text-secondary font-medium text-right">Actions</TableHead>
             </TableRow>
@@ -374,13 +381,6 @@ export default function DestinationsPage() {
                           className="bg-elevated border-border text-text-primary font-mono text-xs h-8"
                         />
                       </TableCell>
-                      <TableCell>
-                        <Input
-                          value={editForm.title}
-                          onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                          className="bg-elevated border-border text-text-primary h-8"
-                        />
-                      </TableCell>
                       <TableCell className="text-text-tertiary text-xs">—</TableCell>
                       <TableCell className="text-center">
                         <Switch
@@ -419,28 +419,9 @@ export default function DestinationsPage() {
                         {destination.rtmpUrl}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs text-text-secondary">
-                            {visibleKeys.has(destination.id)
-                              ? destination.streamKey
-                              : maskKey()}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => toggleKeyVisibility(destination.id)}
-                            className="h-6 w-6 text-text-tertiary hover:text-text-secondary hover:bg-elevated"
-                          >
-                            {visibleKeys.has(destination.id) ? (
-                              <EyeOff className="w-3.5 h-3.5" />
-                            ) : (
-                              <Eye className="w-3.5 h-3.5" />
-                            )}
-                          </Button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-text-secondary">
-                        {destination.title}
+                        <span className="font-mono text-xs text-text-secondary">
+                          {destination.hasStreamKey ? maskKey() : "not set"}
+                        </span>
                       </TableCell>
                       <TableCell>
                         {testingIds.has(destination.id) ? (
@@ -450,17 +431,29 @@ export default function DestinationsPage() {
                           </span>
                         ) : testResults[destination.id] ? (
                           testResults[destination.id].ok ? (
-                            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+                            <span
+                              title={testResults[destination.id].key_detail}
+                              className="flex items-center gap-1.5 text-xs text-emerald-400"
+                            >
                               <CircleCheck className="w-3.5 h-3.5 shrink-0" />
-                              {testResults[destination.id].latency_ms}ms
+                              {testResults[destination.id].key_status === "ok"
+                                ? `Key accepted · ${testResults[destination.id].latency_ms}ms`
+                                : `Reachable · ${testResults[destination.id].latency_ms}ms`}
                             </span>
                           ) : (
                             <span
-                              title={testResults[destination.id].error}
+                              title={
+                                testResults[destination.id].key_detail ||
+                                testResults[destination.id].error
+                              }
                               className="flex items-center gap-1.5 text-xs text-red-400"
                             >
                               <CircleAlert className="w-3.5 h-3.5 shrink-0" />
-                              Failed
+                              {testResults[destination.id].key_status === "rejected"
+                                ? "Key rejected"
+                                : testResults[destination.id].key_status === "unreadable"
+                                  ? "Key unreadable"
+                                  : "Unreachable"}
                             </span>
                           )
                         ) : (
@@ -481,7 +474,7 @@ export default function DestinationsPage() {
                             size="icon"
                             onClick={() => testDestination(destination.id)}
                             disabled={testingIds.has(destination.id)}
-                            title="Test reachability"
+                            title="Pre-flight check — confirms the platform accepts this stream key"
                             className="h-8 w-8 text-text-tertiary hover:text-text-secondary hover:bg-elevated"
                           >
                             <PlugZap className="w-4 h-4" />

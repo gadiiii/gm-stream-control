@@ -120,7 +120,7 @@ export default function StreamingDashboard() {
       setDestinations((prev) =>
         prev.map((d) => ({
           ...d,
-          status: d.enabled ? "connected" : "disabled",
+          status: d.enabled ? "configured" : "disabled",
           viewers: 0,
         }))
       )
@@ -311,7 +311,7 @@ export default function StreamingDashboard() {
             <div className="space-y-3">
               {destinations.map((destination) => (
                 <DestinationCard
-                  key={destination.platform}
+                  key={destination.id}
                   platform={destination.platform}
                   status={destination.status}
                   viewers={destination.viewers}

@@ -52,7 +52,7 @@ echo "=== Building frontend ==="
 cd /opt/gm-stream-control/frontend
 
 if [ ! -f .env.local ]; then
-    cp .env.local.example .env.local 2>/dev/null || cat > .env.local << 'EOF'
+    cp .env.example .env.local 2>/dev/null || cat > .env.local << 'EOF'
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_WS_URL=ws://localhost:8000
 NEXT_PUBLIC_SUPABASE_URL=
