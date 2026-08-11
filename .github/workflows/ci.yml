@@ -22,9 +22,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
-      # `npm run lint` is a no-op today — eslint isn't a declared dependency
-      # (package.json references it, but it's absent from package-lock.json).
-      # Re-add this once that's fixed: `npm run lint`.
+      - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run build
         env:
@@ -36,7 +34,7 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: "placeholder-anon-key"
 
   backend:
-    name: Backend (import check)
+    name: Backend (tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,3 +53,6 @@ jobs:
       # Sanity import — catches syntax/import errors without needing live
       # Supabase/DB credentials (main.py degrades gracefully when unset).
       - run: python -c "import main"
+      # The suite generates its own ENCRYPTION_KEY (see tests/conftest.py) and
+      # never contacts Supabase or nginx.
+      - run: python -m pytest -q
