@@ -8,7 +8,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from collections import deque
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -25,6 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from supabase import create_client
 
+import rtmp_probe
+
 load_dotenv()
 
 logger = logging.getLogger("gm_stream_control")
@@ -38,10 +40,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
-YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "")
-FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN", "")
-FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "")
 RTMP_STAT_URL = os.getenv("RTMP_STAT_URL", "http://localhost:8080/stat")
 NGINX_CONFIG_PATH = os.getenv("NGINX_CONFIG_PATH", "")
 CF_TUNNEL_SECRET = os.getenv("CF_TUNNEL_SECRET", "")
@@ -61,7 +59,23 @@ supabase: Any | None = (
     create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 )
 
-app = FastAPI(title="GM Stream Control Panel API")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    poller = asyncio.create_task(poll_nginx_stats())
+    # Regenerate on boot so nginx matches the database even if destinations
+    # changed while the backend was down.
+    if supabase is not None and NGINX_CONFIG_PATH:
+        with suppress(Exception):
+            await write_nginx_config_and_reload()
+    try:
+        yield
+    finally:
+        poller.cancel()
+        with suppress(asyncio.CancelledError):
+            await poller
+
+
+app = FastAPI(title="GM Stream Control Panel API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -205,9 +219,17 @@ def get_fernet() -> Fernet:
 
 
 def get_current_user(request: Request) -> dict[str, Any]:
-    """Validate Supabase JWT by calling the Supabase auth API."""
+    """Validate Supabase JWT by calling the Supabase auth API.
+
+    Fails closed when Supabase isn't configured. Returning an empty user in that
+    case would leave every authenticated endpoint wide open — a misconfigured
+    backend should refuse to serve rather than serve unauthenticated.
+    """
     if supabase is None:
-        return {}
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase is not configured, so requests cannot be authenticated.",
+        )
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
@@ -260,6 +282,19 @@ def encrypt_stream_key(stream_key: str) -> str:
             ),
         )
     return fernet.encrypt(stream_key.encode()).decode()
+
+
+def without_stream_key(destination: dict[str, Any] | None) -> dict[str, Any]:
+    """Strip the stored stream key from a destination row before returning it.
+
+    The value is ciphertext, but it is still the encrypted secret and the
+    browser has no use for it. `has_stream_key` is what the edit form needs.
+    """
+    if not destination:
+        return {}
+    row = dict(destination)
+    row["has_stream_key"] = bool(row.pop("stream_key", None))
+    return row
 
 
 def decrypt_stream_key(encrypted_stream_key: str) -> str:
@@ -408,13 +443,32 @@ async def get_enabled_destinations() -> list[dict[str, Any]]:
     return data or []
 
 
-def build_nginx_config(destinations: list[dict[str, Any]]) -> str:
-    push_lines = []
+def build_push_lines(destinations: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Build one `push` line per destination, plus the names of any we skipped.
+
+    A destination whose stored key won't decrypt is skipped rather than raised
+    on: one bad row must not blank out the push lines of every other platform.
+    """
+    push_lines: list[str] = []
+    skipped: list[str] = []
     for destination in destinations:
-        stream_key = decrypt_stream_key(destination["stream_key"])
+        try:
+            stream_key = get_fernet().decrypt(destination["stream_key"].encode()).decode()
+        except Exception:
+            logger.error(
+                "Skipping destination %r — its stored stream key cannot be decrypted. "
+                "Re-enter the key in the control panel.",
+                destination.get("name"),
+            )
+            skipped.append(str(destination.get("name") or destination.get("id")))
+            continue
         target = f"{destination['rtmp_url'].rstrip('/')}/{stream_key}"
         push_lines.append(f"            push {target};")
+    return push_lines, skipped
 
+
+def build_nginx_config(destinations: list[dict[str, Any]]) -> str:
+    push_lines, _ = build_push_lines(destinations)
     pushes = "\n".join(push_lines)
     return f"""load_module modules/ngx_rtmp_module.so;
 
@@ -429,6 +483,16 @@ rtmp {{
         listen 1935;
         chunk_size 4096;
 
+        # NOTE: do not add a `resolver` directive here. Ubuntu's
+        # libnginx-mod-rtmp (arut's module) has no such directive in any rtmp
+        # context, and nginx refuses to start with it — verified in test-env.
+        # It was added in 4168d75 and correctly removed again in d73ed66.
+        #
+        # nginx resolves each `push` hostname when this config LOADS, not when
+        # the push starts. If DNS is unavailable at that moment, `nginx -t`
+        # fails with "host not found in url" and the entire config is rejected,
+        # taking every destination down at once. deploy/fix-dns.service exists
+        # to guarantee DNS is up at boot for exactly this reason.
         application live {{
             live on;
             record off;
@@ -510,7 +574,12 @@ async def write_nginx_config_and_reload(*, force: bool = False) -> dict[str, Any
 
     destinations = await get_enabled_destinations()
     config_path = Path(NGINX_CONFIG_PATH)
-    result: dict[str, Any] = {"destination_count": len(destinations), "config_path": str(config_path)}
+    _, skipped = build_push_lines(destinations)
+    result: dict[str, Any] = {
+        "destination_count": len(destinations) - len(skipped),
+        "skipped_destinations": skipped,
+        "config_path": str(config_path),
+    }
 
     try:
         previous = await asyncio.to_thread(config_path.read_text) if config_path.exists() else None
@@ -565,14 +634,6 @@ async def request_payload(request: Request) -> dict[str, Any]:
     body = (await request.body()).decode()
     parsed = parse_qs(body)
     return {key: values[-1] for key, values in parsed.items()}
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    asyncio.create_task(poll_nginx_stats())
-    if supabase is not None and NGINX_CONFIG_PATH:
-        with suppress(Exception):
-            await write_nginx_config_and_reload()
 
 
 @app.websocket("/api/stream/ws")
@@ -688,7 +749,14 @@ async def stop_stream(_: dict = Depends(get_current_user)) -> dict[str, Any]:
 
 
 @app.post("/api/stream/stop/{dest_id}")
-async def stop_destination(dest_id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
+async def disable_destination(dest_id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """Turn a destination off.
+
+    This is not a "stop pushing for this session" — it clears `enabled` in the
+    database, so the destination stays off for every future stream until it is
+    switched back on. The route name is kept for the existing Companion and
+    frontend callers.
+    """
     destination = await db_update("destinations", str(dest_id), {"enabled": False})
     nginx_result = await write_nginx_config_and_reload()
     if active_stream_id:
@@ -705,7 +773,14 @@ async def stop_destination(dest_id: UUID, _: dict = Depends(get_current_user)) -
 
 @app.get("/api/destinations")
 async def list_destinations(_: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
-    return await db_select("destinations")
+    """List destinations without their stream keys.
+
+    The stored key is ciphertext, so returning it leaks nothing a client can
+    use directly — but it is still the encrypted secret, and there is no reason
+    for the browser to hold it. `has_stream_key` is all the edit form needs to
+    show "key set — leave blank to keep it".
+    """
+    return [without_stream_key(row) for row in await db_select("destinations")]
 
 
 @app.post("/api/destinations")
@@ -714,7 +789,7 @@ async def create_destination(payload: DestinationCreate, _: dict = Depends(get_c
     data["stream_key"] = encrypt_stream_key(data["stream_key"])
     destination = await db_insert("destinations", data)
     await write_nginx_config_and_reload()
-    return destination
+    return without_stream_key(destination)
 
 
 @app.patch("/api/destinations/{id}")
@@ -723,8 +798,8 @@ async def update_destination(id: UUID, payload: DestinationPatch, _: dict = Depe
     if "stream_key" in data:
         data["stream_key"] = encrypt_stream_key(data["stream_key"])
     destination = await db_update("destinations", str(id), data)
-    await write_nginx_config_and_reload()
-    return destination
+    result = await write_nginx_config_and_reload()
+    return {**without_stream_key(destination), "nginx": result}
 
 
 @app.delete("/api/destinations/{id}")
@@ -783,15 +858,61 @@ async def probe_rtmp_endpoint(rtmp_url: str) -> dict[str, Any]:
 
 
 @app.post("/api/destinations/{id}/test")
-async def test_destination(id: UUID, _: dict = Depends(get_current_user)) -> dict[str, Any]:
+async def test_destination(
+    id: UUID,
+    validate_key: bool = True,
+    _: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Check a destination before a service.
+
+    Two levels. Reachability opens a TCP connection — cheap, and catches a
+    typo'd host, dead DNS or a blocked port. Key validation goes further and
+    asks the platform to accept a publish of the stored stream key, which is
+    the only way to catch a wrong or expired key before it fails live. No audio
+    or video is sent; see backend/rtmp_probe.py.
+
+    Pass validate_key=false to stop at reachability.
+    """
     rows = await db_execute(
-        get_supabase().table("destinations").select("id,name,rtmp_url").eq("id", str(id))
+        get_supabase().table("destinations").select("id,name,rtmp_url,stream_key").eq("id", str(id))
     )
     if not rows:
         raise HTTPException(status_code=404, detail="Destination not found.")
 
-    result = await probe_rtmp_endpoint(rows[0]["rtmp_url"])
-    return {"id": rows[0]["id"], "name": rows[0]["name"], **result}
+    destination = rows[0]
+    result = await probe_rtmp_endpoint(destination["rtmp_url"])
+    response = {"id": destination["id"], "name": destination["name"], **result}
+
+    if not validate_key or not result.get("ok"):
+        return response
+
+    try:
+        stream_key = decrypt_stream_key(destination["stream_key"])
+    except HTTPException:
+        return {
+            **response,
+            "ok": False,
+            "key_status": "unreadable",
+            "error": (
+                "The stored stream key cannot be decrypted, so this destination "
+                "will be skipped. Re-enter the key."
+            ),
+        }
+
+    probe = await rtmp_probe.validate_stream_key(destination["rtmp_url"], stream_key)
+    response["key_status"] = probe.status
+    response["key_detail"] = probe.detail
+    response["key_code"] = probe.code
+
+    if probe.status == "rejected":
+        response["ok"] = False
+        response["error"] = probe.detail
+    elif probe.status == "inconclusive":
+        # Reachable and the key wasn't refused — don't call that a failure, but
+        # don't claim it's confirmed either.
+        response["warning"] = probe.detail
+
+    return response
 
 
 @app.get("/api/analytics/live")

@@ -35,14 +35,16 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const hasShownConnectedToast = useRef(false)
+  // `connect` reschedules itself on close. Going through a ref keeps that
+  // self-reference out of the callback's own initializer.
+  const connectRef = useRef<() => void>(() => {})
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     try {
-     		const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
-const ws = new WebSocket(`${wsUrl}/api/stream/ws`)
- 
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
+      const ws = new WebSocket(`${wsUrl}/api/stream/ws`)
 
       ws.onopen = () => {
         setIsConnected(true)
@@ -68,7 +70,7 @@ const ws = new WebSocket(`${wsUrl}/api/stream/ws`)
         
         // Auto-reconnect after 3 seconds
         reconnectTimeoutRef.current = setTimeout(() => {
-          connect()
+          connectRef.current()
         }, 3000)
       }
 
@@ -80,12 +82,13 @@ const ws = new WebSocket(`${wsUrl}/api/stream/ws`)
     } catch {
       // Connection failed, retry
       reconnectTimeoutRef.current = setTimeout(() => {
-        connect()
+        connectRef.current()
       }, 3000)
     }
   }, [])
 
   useEffect(() => {
+    connectRef.current = connect
     connect()
 
     return () => {

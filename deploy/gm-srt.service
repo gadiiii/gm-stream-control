@@ -1,0 +1,17 @@
+[Unit]
+Description=GM Stream Control — SRT ingest (MediaMTX)
+After=network-online.target
+Wants=network-online.target
+# nginx must be up first: MediaMTX forwards into it the moment a stream arrives.
+After=nginx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mediamtx /opt/gm-stream-control/deploy/mediamtx.yml
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/gm-stream-control
+
+[Install]
+WantedBy=multi-user.target

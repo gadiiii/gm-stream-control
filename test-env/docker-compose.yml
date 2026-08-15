@@ -1,0 +1,73 @@
+# Offsite test environment. See test-env/README.md.
+#
+# Run from the repo root:
+#   docker-compose -f test-env/docker-compose.yml up -d --build
+
+name: gm-stream-test
+
+services:
+  # nginx-rtmp + backend, mirroring the production host layout.
+  server:
+    build:
+      context: ..
+      dockerfile: test-env/Dockerfile
+    container_name: gm-test-server
+    ports:
+      - "1935:1935"   # RTMP ingest — point the synthetic feed (or OBS) here
+      - "8000:8000"   # backend API
+      - "8080:8080"   # nginx-rtmp /stat and HLS
+    volumes:
+      # Bind-mounted so backend edits take effect on restart, no rebuild.
+      - ../backend:/app/backend
+      - ../deploy:/app/deploy:ro
+    environment:
+      # Staging Supabase — never the production project. See .env.example.
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      NGINX_CONFIG_PATH: /etc/nginx/nginx.conf
+      RTMP_STAT_URL: http://127.0.0.1:8080/stat
+      FRONTEND_ORIGIN: http://localhost:3000
+    depends_on:
+      - sink-youtube
+      - sink-facebook
+    restart: unless-stopped
+
+  # SRT ingest, off by default. Start it with:
+  #   docker-compose -f test-env/docker-compose.yml --profile srt up -d
+  # then publish to srt://localhost:8890?streamid=publish:live&latency=2000
+  #
+  # The -ffmpeg image variant matters: the forward into nginx-rtmp shells out to
+  # ffmpeg, and the plain image doesn't have it. On the real server ffmpeg comes
+  # from deploy/setup.sh.
+  srt:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: gm-test-srt
+    profiles: ["srt"]
+    ports:
+      - "8890:8890/udp"
+    volumes:
+      - ./mediamtx-test.yml:/mediamtx.yml:ro
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  sink-youtube:
+    image: tiangolo/nginx-rtmp:latest
+    container_name: gm-test-sink-youtube
+    ports:
+      - "1936:1935"
+      - "8081:8080"
+    volumes:
+      - ./sink.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
+  sink-facebook:
+    image: tiangolo/nginx-rtmp:latest
+    container_name: gm-test-sink-facebook
+    ports:
+      - "1937:1935"
+      - "8082:8080"
+    volumes:
+      - ./sink.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped

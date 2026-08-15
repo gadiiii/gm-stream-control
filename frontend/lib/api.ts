@@ -15,11 +15,23 @@ export interface ApiDestination {
   id: string
   name: string
   rtmp_url: string
-  stream_key: string
+  /** The backend never returns the stored key, only whether one is set. */
+  has_stream_key?: boolean
   enabled: boolean
   platform_type?: string
   created_at?: string
   updated_at?: string
+  nginx?: NginxResult
+}
+
+/** Outcome of the nginx regeneration that follows every destination change. */
+export interface NginxResult {
+  ok: boolean
+  deferred?: boolean
+  skipped?: boolean
+  destination_count?: number
+  skipped_destinations?: string[]
+  error?: string
 }
 
 export interface DestinationPayload {
@@ -34,8 +46,11 @@ export interface Destination {
   id: string
   platform: string
   rtmpUrl: string
+  /** Form input only. Always blank when read from the API — the key never
+   * leaves the server. Send it only when the user types a new one. */
   streamKey: string
-  title: string
+  /** Whether a key is already stored, so the form can say "leave blank to keep". */
+  hasStreamKey: boolean
   enabled: boolean
   platformType?: string
 }
@@ -59,6 +74,13 @@ export interface DestinationTestResult {
   port?: number
   latency_ms?: number
   error?: string
+  warning?: string
+  /** Result of asking the platform to accept the stored stream key.
+   * "ok" — accepted; "rejected" — wrong or expired; "unreadable" — the stored
+   * key won't decrypt; "inconclusive" — no clear answer. */
+  key_status?: "ok" | "rejected" | "unreachable" | "inconclusive" | "unreadable"
+  key_detail?: string
+  key_code?: string
 }
 
 export interface ApiStreamAnalytics {
@@ -101,8 +123,8 @@ export const mapDestination = (d: ApiDestination): Destination => ({
   id: d.id,
   platform: d.name,
   rtmpUrl: d.rtmp_url,
-  streamKey: d.stream_key,
-  title: d.name,
+  streamKey: "",
+  hasStreamKey: d.has_stream_key ?? false,
   enabled: d.enabled,
   platformType: d.platform_type,
 })

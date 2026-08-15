@@ -4,7 +4,10 @@ import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
 import { Youtube, Facebook, Instagram, Radio } from "lucide-react"
 
-export type DestinationStatus = "connected" | "error" | "disabled"
+/** nginx-rtmp reports nothing about whether an individual push is being
+ * accepted, so "configured" is the strongest honest claim: the push line
+ * exists and the stream is running. It does not mean the platform accepted it. */
+export type DestinationStatus = "configured" | "error" | "disabled"
 
 interface DestinationCardProps {
   platform: "youtube" | "facebook" | "instagram" | "owncast"
@@ -41,9 +44,9 @@ const platformConfig = {
 }
 
 const statusStyles = {
-  connected: {
+  configured: {
     badge: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-    text: "Connected",
+    text: "Configured",
   },
   error: {
     badge: "bg-red-500/20 text-red-400 border-red-500/30",
@@ -91,7 +94,7 @@ export function DestinationCard({
             )}>
               {statusConfig.text}
             </span>
-            {status === "connected" && (
+            {status === "configured" && viewers > 0 && (
               <span className="text-xs text-text-secondary font-mono">
                 {viewers.toLocaleString()} viewers
               </span>

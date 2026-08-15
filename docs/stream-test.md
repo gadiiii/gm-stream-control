@@ -1,5 +1,10 @@
 # Local Stream Test
 
+Manual walkthrough with OBS or the ATEM. To test **multi-platform fan-out**
+automatically, without the church's equipment, use
+[`test-env/`](../test-env/README.md) instead — it asserts that both destinations
+actually received the stream.
+
 This gives you a real RTMP ingest target on your machine:
 
 ```bash

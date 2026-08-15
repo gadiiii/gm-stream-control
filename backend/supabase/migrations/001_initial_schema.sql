@@ -36,6 +36,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Dropped first so the whole file can be re-run (setting up a staging project,
+-- or re-applying after an edit) without erroring on an existing trigger.
+DROP TRIGGER IF EXISTS destinations_updated_at ON destinations;
 CREATE TRIGGER destinations_updated_at
     BEFORE UPDATE ON destinations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
